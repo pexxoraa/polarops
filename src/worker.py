@@ -84,6 +84,27 @@ async def q_write(env, sql: str, *params):
     return await stmt.run()
 
 
+async def q_batch(env, queries: list[tuple[str, tuple]]) -> list[list[dict]]:
+    """Execute read queries in one D1 round trip.
+
+    Cloudflare documents D1 batch() as a major latency optimization because it
+    avoids one network round trip per statement. Results are returned in the
+    same order as the prepared statements.
+    """
+    statements = []
+    for sql, params in queries:
+        stmt = env.DB.prepare(sql)
+        if params:
+            stmt = stmt.bind(*params)
+        statements.append(stmt)
+    results = await env.DB.batch(statements)
+    output = []
+    for result in results:
+        rows = to_py(result.results)
+        output.append(list(rows or []))
+    return output
+
+
 def last_row_id(result) -> int:
     try:
         return int(result.meta.last_row_id)
@@ -706,16 +727,32 @@ async def telemetry_history(expedition_id: int, entity_type: str, entity_id: int
 async def dashboard(expedition_id: int, request: Request, user=Depends(current_user)):
     env = request.scope["env"]
     exp = await ensure_expedition_access(env, user, expedition_id)
-    personnel = await q_all(env, "SELECT p.*,l.name location_name,l.latitude,l.longitude FROM personnel p LEFT JOIN locations l ON l.id=p.location_id WHERE p.expedition_id=?", expedition_id)
-    cargo = await q_all(env, "SELECT c.*,l.name location_name,d.name destination_name FROM cargo c LEFT JOIN locations l ON l.id=c.current_location_id LEFT JOIN locations d ON d.id=c.destination_location_id WHERE c.expedition_id=?", expedition_id)
-    inventory = await q_all(env, "SELECT i.*,l.name location_name FROM inventory_items i LEFT JOIN locations l ON l.id=i.location_id WHERE i.expedition_id=?", expedition_id)
-    vehicles = await q_all(env, "SELECT v.*,l.name location_name,l.latitude,l.longitude FROM vehicles v LEFT JOIN locations l ON l.id=v.location_id WHERE v.expedition_id=?", expedition_id)
-    locations = await q_all(env, "SELECT * FROM locations WHERE expedition_id=?", expedition_id)
-    incidents = await q_all(env, "SELECT i.*,l.name location_name FROM incidents i LEFT JOIN locations l ON l.id=i.location_id WHERE i.expedition_id=? ORDER BY i.id DESC", expedition_id)
-    activity = await q_all(env, "SELECT a.*,u.name user_name FROM activity a LEFT JOIN users u ON u.id=a.user_id WHERE a.expedition_id=? ORDER BY a.id DESC LIMIT 12", expedition_id)
-    assets_count = int(await q_value(env, "SELECT COUNT(*) c FROM assets WHERE expedition_id=?", expedition_id) or 0)
-    ppos = await latest_telemetry(env, expedition_id, "personnel")
-    vpos = await latest_telemetry(env, expedition_id, "vehicle")
+    latest_sql = """
+        SELECT t.* FROM telemetry_positions t
+        JOIN (
+          SELECT entity_type,entity_id,MAX(id) max_id
+          FROM telemetry_positions
+          WHERE expedition_id=? AND entity_type=?
+          GROUP BY entity_type,entity_id
+        ) latest ON latest.max_id=t.id
+        ORDER BY t.entity_type,t.entity_id
+    """
+    (
+        personnel, cargo, inventory, vehicles, locations,
+        incidents, activity, assets_rows, ppos, vpos,
+    ) = await q_batch(env, [
+        ("SELECT p.*,l.name location_name,l.latitude,l.longitude FROM personnel p LEFT JOIN locations l ON l.id=p.location_id WHERE p.expedition_id=?", (expedition_id,)),
+        ("SELECT c.*,l.name location_name,d.name destination_name FROM cargo c LEFT JOIN locations l ON l.id=c.current_location_id LEFT JOIN locations d ON d.id=c.destination_location_id WHERE c.expedition_id=?", (expedition_id,)),
+        ("SELECT i.*,l.name location_name FROM inventory_items i LEFT JOIN locations l ON l.id=i.location_id WHERE i.expedition_id=?", (expedition_id,)),
+        ("SELECT v.*,l.name location_name,l.latitude,l.longitude FROM vehicles v LEFT JOIN locations l ON l.id=v.location_id WHERE v.expedition_id=?", (expedition_id,)),
+        ("SELECT * FROM locations WHERE expedition_id=?", (expedition_id,)),
+        ("SELECT i.*,l.name location_name FROM incidents i LEFT JOIN locations l ON l.id=i.location_id WHERE i.expedition_id=? ORDER BY i.id DESC", (expedition_id,)),
+        ("SELECT a.*,u.name user_name FROM activity a LEFT JOIN users u ON u.id=a.user_id WHERE a.expedition_id=? ORDER BY a.id DESC LIMIT 12", (expedition_id,)),
+        ("SELECT COUNT(*) c FROM assets WHERE expedition_id=?", (expedition_id,)),
+        (latest_sql, (expedition_id, "personnel")),
+        (latest_sql, (expedition_id, "vehicle")),
+    ])
+    assets_count = int(assets_rows[0].get("c") if assets_rows else 0)
     apply_live_positions(personnel, ppos)
     apply_live_positions(vehicles, vpos)
 
