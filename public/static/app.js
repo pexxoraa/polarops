@@ -489,29 +489,8 @@
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
   }
 
-  function addMapDataControl(map){
-    if(!map||!window.L)return;
-    const control=L.control({position:'bottomright'});
-    control.onAdd=()=>{
-      const div=L.DomUtil.create('div','map-data-control');
-      div.innerHTML=`<button type="button" class="map-data-toggle" aria-expanded="false" title="Map data attribution">⒐ Map data</button>
-        <div class="map-data-popover" hidden>
-          <strong>Basemap attribution</strong>
-          <a href="https://support.esri.com/en-us/knowledge-base/what-is-the-correct-way-to-cite-an-arcgis-online-basema-000012040" target="_blank" rel="noopener">Full provider attribution ←</a>
-        </div>`;
-      const button=div.querySelector('.map-data-toggle');
-      const pop=div.querySelector('.map-data-popover');
-      button.addEventListener('click',e=>{
-        e.preventDefault();e.stopPropagation();
-        const open=pop.hidden;
-        pop.hidden=!open;
-        button.setAttribute('aria-expanded',open?'true':'false');
-      });
-      L.DomEvent.disableClickPropagation(div);
-      L.DomEvent.disableScrollPropagation(div);
-      return div;
-    };
-    control.addTo(map);
+  function addMapDataControl(){
+    // Map-data attribution button intentionally removed from all PolarOps maps.
   }
 
   function addMissionMapLegend(map,pole,counts={}){
