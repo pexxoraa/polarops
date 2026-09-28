@@ -492,7 +492,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(self), camera=(self)"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; "
+        "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com; media-src 'self' blob:; connect-src 'self' ws: wss:; "
         "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
     if request.url.path.startswith("/api/"):
