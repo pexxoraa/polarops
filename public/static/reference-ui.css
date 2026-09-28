@@ -240,3 +240,7 @@ body.map-fullscreen-open{overflow:hidden}
 .incident-command-panel{margin-top:13px}.popup-profile-btn{margin-top:6px;border:1px solid #b8d1e3;background:#eef7fd;color:#0a6ebd;border-radius:5px;padding:4px 6px;font:700 8px/1 sans-serif;cursor:pointer}.facility-profile .notice-card{margin-top:10px}
 @media(max-width:1050px){.ops-grid,.route-layout{grid-template-columns:1fr}.science-record-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.ops-command-hero,.readiness-hero{align-items:flex-start;flex-direction:column}.science-record-grid{grid-template-columns:1fr}.route-planner-map{height:360px}}
+
+/* Navigation latency polish */
+#view{transition:opacity .12s ease}
+#view.view-loading{opacity:.76;pointer-events:none}

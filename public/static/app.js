@@ -5,6 +5,8 @@
   const $$ = (s, root=document) => [...root.querySelectorAll(s)];
   const esc = (v='') => String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
   const tokenKey='polarops_token_v1', cacheKey='polarops_cache_v1', queueKey='polarops_queue_v1';
+  let persistentCache={};try{persistentCache=JSON.parse(localStorage.getItem(cacheKey)||'{}')}catch{}
+  let cacheWriteTimer=null;
   const state = {
     token: localStorage.getItem(tokenKey) || '', user:null, expeditions:[], expeditionId:null,
     view:'overview', online:navigator.onLine, pending: JSON.parse(localStorage.getItem(queueKey)||'[]'),
@@ -13,7 +15,8 @@
     fallbackTimer:null, deferredRealtime:false,
     gpsWatchId:null, gpsPersonnelId:null, gpsLastSent:0,
     vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null,
-    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}, renderInProgress:false, renderQueued:false
+    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}, renderInProgress:false, renderQueued:false,
+    memoryCache:new Map(), prefetchGeneration:0
   };
 
   const navItems=[
@@ -23,10 +26,26 @@
     ['alerts','!','Alert Center'],['activity','≡','Audit Trail'],['settings','⚙','Settings']
   ];
 
+  const FAST_CACHE_MS=15000;
   function saveQueue(){ localStorage.setItem(queueKey,JSON.stringify(state.pending)); updateSync(); }
-  function getCache(){ try{return JSON.parse(localStorage.getItem(cacheKey)||'{}')}catch{return {}} }
-  function setCache(path,data){ const c=getCache(); c[path]={ts:Date.now(),data}; localStorage.setItem(cacheKey,JSON.stringify(c)); }
-  function fromCache(path){ const c=getCache()[path]; return c?.data; }
+  function getCache(){ return persistentCache; }
+  function flushPersistentCache(){ clearTimeout(cacheWriteTimer);cacheWriteTimer=null;try{localStorage.setItem(cacheKey,JSON.stringify(persistentCache))}catch{} }
+  function setCache(path,data){
+    persistentCache[path]={ts:Date.now(),data};
+    clearTimeout(cacheWriteTimer);
+    cacheWriteTimer=setTimeout(flushPersistentCache,350);
+  }
+  function fromCache(path){ return persistentCache[path]?.data; }
+  window.addEventListener('pagehide',flushPersistentCache);
+  function fastCacheable(path){
+    return !path.includes('force=true') && !path.startsWith('/api/realtime/ticket') && !path.startsWith('/api/ops/search') && !path.startsWith('/api/public/facilities/') && !path.includes('/weather');
+  }
+  function fastCacheGet(path){
+    const hit=state.memoryCache.get(path);
+    return hit && Date.now()-hit.ts<FAST_CACHE_MS ? hit.data : undefined;
+  }
+  function fastCacheSet(path,data){ if(fastCacheable(path))state.memoryCache.set(path,{ts:Date.now(),data}); }
+  function clearFastCache(){ state.memoryCache.clear(); }
   function toast(title,detail='',kind='good',ms=2800){
     const root=$('#toastRoot'); if(!root)return;
     const el=document.createElement('div'); el.className=`toast ${kind}`; el.innerHTML=`<strong>${esc(title)}</strong>${detail?`<span>${esc(detail)}</span>`:''}`;
@@ -35,16 +54,24 @@
 
   async function api(path,opts={}){
     const method=(opts.method||'GET').toUpperCase();
+    const useFastCache=method==='GET' && opts.noFastCache!==true && fastCacheable(path);
+    if(useFastCache){
+      const cached=fastCacheGet(path);
+      if(cached!==undefined)return cached;
+    }
     const headers={'Content-Type':'application/json',...(opts.headers||{})};
     if(state.token) headers.Authorization=`Bearer ${state.token}`;
+    const fetchOpts={...opts,method,headers};
+    delete fetchOpts.noFastCache;
     try{
-      const res=await fetch(path,{...opts,method,headers});
+      const res=await fetch(path,fetchOpts);
       if(res.status===401 && path!='/api/auth/login'){ logout(false); throw new Error('Your session expired. Please sign in again.'); }
       let data=null; const ct=res.headers.get('content-type')||'';
       if(ct.includes('application/json')) data=await res.json(); else data=await res.text();
       if(!res.ok) throw new Error(data?.detail || data || `Request failed (${res.status})`);
       state.online=true;
-      if(method==='GET') setCache(path,data);
+      if(method==='GET'){setCache(path,data);fastCacheSet(path,data)}
+      else clearFastCache();
       updateSync();
       return data;
     }catch(err){
@@ -143,6 +170,7 @@
 
   function handleRealtimeEvent(message){
     if(Number(message.expedition_id)!==Number(state.expeditionId))return;
+    if(!message.type?.startsWith('telemetry.'))clearFastCache();
     if(message.type==='incident.created')toast('Live SOS received',message.data?.code||'New incident','danger',4200);
 
     // Telemetry is high-frequency. Never rebuild the dashboard for telemetry:
@@ -189,6 +217,38 @@
     },30000);
   }
 
+  async function prefetchMissionData(){
+    const expeditionId=Number(state.expeditionId), generation=++state.prefetchGeneration;
+    if(!expeditionId||!state.token||!navigator.onLine)return;
+    const pole=currentPole();
+    const paths=[
+      `/api/locations?expedition_id=${expeditionId}`,
+      `/api/personnel?expedition_id=${expeditionId}`,
+      `/api/cargo?expedition_id=${expeditionId}`,
+      `/api/inventory?expedition_id=${expeditionId}`,
+      `/api/vehicles?expedition_id=${expeditionId}`,
+      `/api/assets?expedition_id=${expeditionId}`,
+      `/api/incidents?expedition_id=${expeditionId}`,
+      `/api/ops/summary?expedition_id=${expeditionId}`,
+      `/api/ops/routes?expedition_id=${expeditionId}`,
+      `/api/ops/science?expedition_id=${expeditionId}`,
+      `/api/ops/comms?expedition_id=${expeditionId}`,
+      `/api/ops/readiness?expedition_id=${expeditionId}`,
+      `/api/ops/alerts?expedition_id=${expeditionId}`,
+      `/api/ops/audit?expedition_id=${expeditionId}&limit=300`,
+      `/api/integrations/workers/status?expedition_id=${expeditionId}`,
+      `/api/environment/overview?expedition_id=${expeditionId}`,
+      '/api/data-sources',
+      pole==='south'?'/api/public/facilities?limit=1000':'/api/public/arctic-research-stations'
+    ];
+    if(roleCan('commander'))paths.push('/api/users');
+    for(let i=0;i<paths.length;i+=4){
+      if(generation!==state.prefetchGeneration||expeditionId!==Number(state.expeditionId))return;
+      await Promise.allSettled(paths.slice(i,i+4).map(path=>api(path)));
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+  }
+
   window.addEventListener('online',()=>{state.online=true;updateSync();flushQueue();connectRealtime()});
   window.addEventListener('offline',()=>{state.online=false;disconnectRealtime();updateSync()});
 
@@ -222,9 +282,10 @@
   async function switchExpedition(id){
     const next=state.expeditions.find(e=>e.id===Number(id)); if(!next)return;
     stopPersonnelGps(false); stopVehicleSimulation(false); destroyLiveMap();
+    state.prefetchGeneration++;clearFastCache();
     state.expeditionId=Number(next.id);
     localStorage.setItem('polarops_expedition',state.expeditionId);
-    applyPolarTheme(); renderShell(); await renderView(); connectRealtime();
+    applyPolarTheme(); renderShell(); await renderView(); connectRealtime();setTimeout(prefetchMissionData,80);
   }
   async function switchPole(pole){
     const next=state.expeditions.find(e=>poleForRegion(e.region)===pole);
@@ -272,11 +333,20 @@
     try{ const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password})}); if(!r?.token||!r?.user)throw new Error('Invalid login response'); const signedInRole=r.user.role||'user'; state.token=r.token;state.user=r.user;localStorage.setItem(tokenKey,state.token);await bootAuthed(); if(state.user)toast('Signed in',`Role: ${signedInRole}`); }
     catch(e){toast('Sign-in failed',e.message,'danger'); if(btn){btn.disabled=false;btn.textContent='Sign in'}}
   }
-  function logout(show=true){ stopPersonnelGps(false);stopVehicleSimulation(false);disconnectRealtime();clearInterval(state.fallbackTimer);localStorage.removeItem(tokenKey);state.token='';state.user=null;state.expeditions=[];state.expeditionId=null; if(show)toast('Signed out');renderLogin(); }
+  function logout(show=true){ stopPersonnelGps(false);stopVehicleSimulation(false);disconnectRealtime();clearInterval(state.fallbackTimer);state.prefetchGeneration++;clearFastCache();localStorage.removeItem(tokenKey);state.token='';state.user=null;state.expeditions=[];state.expeditionId=null; if(show)toast('Signed out');renderLogin(); }
 
   async function bootAuthed(){
-    try{ state.user=await api('/api/me'); state.expeditions=await api('/api/expeditions'); if(!state.expeditions.length){ throw new Error('No expedition exists. Create one through the API or reseed demo mode.'); } state.expeditionId=Number(localStorage.getItem('polarops_expedition'))||state.expeditions[0].id; if(!state.expeditions.some(e=>e.id===state.expeditionId))state.expeditionId=state.expeditions[0].id; renderShell(); await renderView(); connectRealtime();startFallbackRefresh(); }
-    catch(e){ toast('Unable to start platform',e.message,'danger',4500); logout(false); }
+    try{
+      const [user,expeditions]=await Promise.all([
+        api('/api/me',{noFastCache:true}),
+        api('/api/expeditions',{noFastCache:true})
+      ]);
+      state.user=user;state.expeditions=expeditions;
+      if(!state.expeditions.length)throw new Error('No expedition exists. Create one through the API or reseed demo mode.');
+      state.expeditionId=Number(localStorage.getItem('polarops_expedition'))||state.expeditions[0].id;
+      if(!state.expeditions.some(e=>e.id===state.expeditionId))state.expeditionId=state.expeditions[0].id;
+      renderShell();await renderView();connectRealtime();startFallbackRefresh();setTimeout(prefetchMissionData,80);
+    }catch(e){ toast('Unable to start platform',e.message,'danger',4500); logout(false); }
   }
 
   function renderShell(){
@@ -313,13 +383,21 @@
     if(state.renderInProgress){state.renderQueued=true;return}
     state.renderInProgress=true;
     const requestedView=state.view;
+    const v=$('#view');if(!v){state.renderInProgress=false;return}
+    const hadContent=!!v.children.length;
+    const loadingTimer=setTimeout(()=>{
+      if(!state.renderInProgress||state.view!==requestedView||!v.isConnected)return;
+      v.classList.add('view-loading');
+      if(!hadContent)v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
+    },120);
     try{
       destroyLiveMap();
-      const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
       try{
         if(requestedView==='overview')await renderOverview(); else if(requestedView==='operations')await window.PolarOpsFeatures.renderOperations(); else if(requestedView==='personnel')await renderPersonnel(); else if(requestedView==='cargo')await renderCargo(); else if(requestedView==='inventory')await renderInventory(); else if(requestedView==='routes')await window.PolarOpsFeatures.renderRoutes(); else if(requestedView==='science')await window.PolarOpsFeatures.renderScience(); else if(requestedView==='comms')await window.PolarOpsFeatures.renderComms(); else if(requestedView==='readiness')await window.PolarOpsFeatures.renderReadiness(); else if(requestedView==='assets')await renderAssets(); else if(requestedView==='vehicles')await renderVehicles(); else if(requestedView==='emergency')await renderEmergency(); else if(requestedView==='environment')await renderEnvironment(); else if(requestedView==='network')await renderNetwork(); else if(requestedView==='alerts')await window.PolarOpsFeatures.renderAlerts(); else if(requestedView==='activity')await window.PolarOpsFeatures.renderAudit(); else if(requestedView==='settings')await renderSettings();
-      }catch(e){ if(state.view===requestedView){v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger')} }
+      }catch(e){ if(state.view===requestedView&&v.isConnected){v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger')} }
     }finally{
+      clearTimeout(loadingTimer);
+      if(v.isConnected)v.classList.remove('view-loading');
       state.renderInProgress=false;
       if(state.renderQueued||state.view!==requestedView){state.renderQueued=false;setTimeout(()=>renderView(),0)}
     }
@@ -1017,7 +1095,9 @@
   async function downloadBackup(){ try{const res=await fetch('/api/backup',{headers:{Authorization:`Bearer ${state.token}`}});if(!res.ok)throw new Error('Backup request failed');const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`polarops-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);toast('Backup downloaded')}catch(err){toast('Backup failed',err.message,'danger')} }
 
   async function init(){
-    if('serviceWorker'in navigator){ try{await navigator.serviceWorker.register('/service-worker.js');state.serviceWorker=true}catch{} }
+    if('serviceWorker'in navigator){
+      navigator.serviceWorker.register('/service-worker.js').then(()=>{state.serviceWorker=true}).catch(()=>{});
+    }
     if(!state.token){renderLogin();return}
     try{await bootAuthed()}catch{renderLogin()}
   }
