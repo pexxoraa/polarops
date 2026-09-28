@@ -37,6 +37,7 @@ from realtime.broadcaster import broadcast
 from realtime.expedition_room import ExpeditionRoom
 from repositories.activity import log_activity
 from services.relationship_service import valid_location_ids, valid_personnel_ids
+from services.realtime_access_service import realtime_ticket_allows_expedition
 
 
 # ----------------------------- Generic helpers -----------------------------
@@ -1153,22 +1154,10 @@ class Default(WorkerEntrypoint):
             if int(payload.get("eid", -1)) != expedition_id:
                 return Response("Unauthorized", status=403)
 
-            user = await q_first(
+            if not await realtime_ticket_allows_expedition(
                 self.env,
-                "SELECT id,organization_id,active FROM users WHERE id=?",
-                int(payload.get("uid", -1)),
-            )
-            expedition = await q_first(
-                self.env,
-                "SELECT id,organization_id FROM expeditions WHERE id=?",
                 expedition_id,
-            )
-            if (
-                not user
-                or not user.get("active")
-                or not expedition
-                or int(user["organization_id"]) != int(payload.get("oid", -1))
-                or int(expedition["organization_id"]) != int(payload.get("oid", -1))
+                payload,
             ):
                 return Response("Unauthorized", status=403)
 
