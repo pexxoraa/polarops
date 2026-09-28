@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 
+from js import TextDecoder
 from workers import fetch as cf_fetch
 
 from core.config import DEFAULT_COMNAP_URL, env_value
@@ -17,8 +18,13 @@ async def fetch_facilities(env) -> tuple[str, list[NormalizedFacility]]:
     if int(response.status) >= 400:
         raise RuntimeError(f"COMNAP HTTP {response.status}")
 
-    text = await response.text()
-    reader = csv.DictReader(io.StringIO(str(text).lstrip("\ufeff")))
+    # COMNAP currently serves the CSV using a Windows-1252/Latin-1 compatible
+    # encoding. Response.text() assumes UTF-8 and replaces accented characters
+    # (for example Cámara and Bahía) with U+FFFD. Decode the raw response using
+    # the Encoding Standard so station names remain authoritative.
+    body = await response.arrayBuffer()
+    text = str(TextDecoder.new("windows-1252").decode(body))
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     facilities: list[NormalizedFacility] = []
 
     for raw in reader:
@@ -66,8 +72,13 @@ async def fetch_facilities(env) -> tuple[str, list[NormalizedFacility]]:
             latitude = None
 
         external_id = pick(raw, "Record ID#", "Facility ID", "ID", "Identifier", "Code")
-        basis = f"{external_id}|{name}|{country}|{latitude}|{longitude}"
-        source_key = "comnap:" + hashlib.sha256(basis.encode()).hexdigest()[:24]
+        if external_id:
+            # COMNAP Record ID is stable even when a facility is renamed or its
+            # coordinates/status change. Keep the source key stable across syncs.
+            source_key = f"comnap:{external_id}"
+        else:
+            basis = f"{name}|{country}|{latitude}|{longitude}"
+            source_key = "comnap:" + hashlib.sha256(basis.encode()).hexdigest()[:24]
 
         facilities.append(
             NormalizedFacility(
