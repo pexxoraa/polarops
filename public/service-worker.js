@@ -1,5 +1,5 @@
-const CACHE='polarops-shell-v4-cloudflare';
-const SHELL=['/','/static/app.css','/static/app.js','/manifest.webmanifest'];
+const CACHE='polarops-shell-v5-reference-ui';
+const SHELL=['/','/static/app.css','/static/reference-ui.css?v=3','/static/app.js','/manifest.webmanifest'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([
   caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE&&k.startsWith('polarops-shell-')).map(k=>caches.delete(k)))),
