@@ -1,230 +1,325 @@
-# PolarOps Architecture Audit
+# PolarOps Architecture Audit — Current Production Snapshot
 
 Date: 2026-09-28
 Branch: cloudflare-deploy
-Baseline commit: 580af998f482c9c7af9bb5a5ca019c35c2e31bf0
+Audited HEAD before changes: 7aedff1
+Scope: deployed Cloudflare application, current source tree, remote D1 schema/migrations, frontend/PWA, realtime and backup paths.
 
 ## Executive summary
 
-PolarOps is already deployed and functional on Cloudflare, but backend and frontend responsibilities are concentrated in two large modules:
+PolarOps is a working Cloudflare-native modular-monolith migration in progress. The stack is appropriate and should be preserved.
 
-- `src/worker.py`: 1,847 lines
-- `public/static/app.js`: 780 lines
+The codebase is no longer the original fully monolithic baseline: environment/facility domains, core security/config/time, D1 helpers, selected repositories/services, realtime modules and app construction have already been extracted. However, the migration is only partial.
 
-The current stack is appropriate and should be preserved: Cloudflare Python Workers + FastAPI + D1 + Durable Objects + WebSockets + Workers Static Assets + vanilla JavaScript/PWA.
+Current concentration remains significant:
+- src/worker.py: 1,140 lines
+- public/static/app.js: 815 lines
 
-The target is a modular monolith, not microservices.
+The most important current findings are:
+1. WebSocket pre-authorization is materially improved and now checks ticket, user, expedition and organization before the Durable Object room is reached.
+2. Offline replay now checks HTTP status, but the queue is still localStorage-based and there is no server-side idempotency or optimistic concurrency.
+3. Critical cargo/inventory/incident multi-write workflows use D1 batch operations and broadcast after persistence.
+4. Tenant checks exist for top-level expedition access, but several foreign-key inputs can still point at a location/personnel/vehicle belonging to another expedition. This is a cross-tenant integrity/read-leak risk and is now the highest unresolved security issue.
+5. Backup event history is included, but restore validation does not exist and the production wrangler config has no BACKUPS R2 binding.
+6. app.py exists, but worker.py still registers most domain routes directly on the imported FastAPI app.
+7. facilities/environment are good examples of the target route -> service -> repository/integration pattern; most other domains remain in worker.py.
+8. there is no real tests/ tree. scripts/offline_checks.py is stale and currently fails because it assumes every route remains in worker.py.
 
 ## 1. Current folder structure
 
-Relevant runtime files:
+Implemented modular areas:
+- src/app.py
+- src/core/{config,security,permissions,time}.py
+- src/database/d1.py
+- src/api/dependencies.py
+- src/api/routes/{health,environment,facilities}.py
+- src/repositories/{activity,data_sources,expeditions,external_cache,facilities,locations}.py
+- src/services/{environment_service,facility_service}.py
+- src/integrations/{comnap,open_meteo,parsing,polar_environment}.py
+- src/realtime/{broadcaster,expedition_room}.py
+- src/schemas/facility.py
 
-- `src/worker.py` - Cloudflare entrypoint, FastAPI app, routes, schemas, auth, SQL, external integrations, realtime, Durable Object
-- `public/index.html`
-- `public/static/app.js`
-- `public/static/app.css`
-- `public/static/reference-ui.css`
-- `public/service-worker.js`
-- `migrations/0001_initial.sql` through `0005_environment_cache.sql`
-- `wrangler.jsonc`
+Still monolithic:
+- auth/users/organizations
+- expeditions and most location mutations
+- telemetry/dashboard
+- personnel
+- cargo
+- inventory
+- vehicles
+- assets
+- incidents
+- operations feed
+- activity
+- backups
+- static fallback routes
 
-## 2. Cloudflare bindings
+Frontend remains one large public/static/app.js plus CSS files.
 
-Configured:
+## 2. Current Cloudflare bindings
 
-- `ASSETS` - Workers Static Assets
-- `DB` - Cloudflare D1
-- `EXPEDITION_ROOM` - Durable Object
-- `AUTH_SECRET` - secret created with Wrangler
-- `COMNAP_FACILITIES_URL`
-- `OPEN_METEO_URL`
-- `OPERATIONS_FEED_URL`
+wrangler.jsonc currently configures:
+- ASSETS -> ./public
+- DB -> polarops-db
+- EXPEDITION_ROOM -> Durable Object class ExpeditionRoom
+- COMNAP_FACILITIES_URL
+- OPEN_METEO_URL
+- OPERATIONS_FEED_URL
+
+AUTH_SECRET exists as a Wrangler secret in production.
 
 Important mismatch:
+- backup code supports env.BACKUPS
+- wrangler.jsonc does not define an R2 BACKUPS binding
+- therefore R2 backup storage is currently not configured
 
-- backup code references `env.BACKUPS`, but `wrangler.jsonc` currently has no R2 `BACKUPS` binding.
-- the backup handler silently ignores that failure.
+No staging environment is defined.
 
-## 3. FastAPI entrypoint
+## 3. FastAPI entrypoints
 
-`src/worker.py` creates the FastAPI application directly and also contains the Cloudflare Worker entrypoint.
+src/app.py creates the FastAPI instance and registers:
+- health
+- environment
+- facilities
 
-There are roughly 45+ API/static routes covering:
+src/worker.py imports that app and then attaches the remaining production routes directly.
 
-- auth/users/organizations
-- expeditions/locations
-- telemetry/environment/dashboard
-- personnel/cargo/inventory
-- vehicles/assets/incidents
-- public facilities/integrations
-- activity/backups/health/static frontend
+This is a transitional architecture. It works, but app construction/route ownership is split between app.py and worker.py.
 
-## 4. Durable Object architecture
+## 4. Durable Object / WebSocket architecture
 
-`ExpeditionRoom` is a hibernatable WebSocket room keyed by expedition ID.
+Current public WebSocket flow:
+1. authenticated HTTP client requests /api/realtime/ticket
+2. server verifies expedition access
+3. server issues a short-lived expedition-specific ticket
+4. Worker validates ticket purpose, expedition ID, user, active state and organization
+5. only then is the request forwarded to EXPEDITION_ROOM
+6. Durable Object accepts the socket and authenticates the normal session token
 
-D1 is correctly treated as the system of record and Durable Objects are used for realtime fanout.
+This closes the original direct cross-tenant room-entry gap.
 
-Critical security issue:
+Remaining work:
+- automated security tests for cross-organization WebSocket denial
+- standardized event envelope with event_id and occurred_at
+- broadcaster currently swallows delivery exceptions without structured logging
 
-The Worker currently forwards `/ws/expeditions/{expedition_id}` to the Durable Object before tenant authorization. The Durable Object accepts any valid PolarOps token after connection and does not verify that the requested expedition belongs to the authenticated organization.
+## 5. D1 schema and production state
 
-This is a cross-tenant WebSocket risk and is P0.
+Remote migrations applied:
+- 0001_initial.sql
+- 0002_seed_demo.sql
+- 0003_cloudflare_password_rounds.sql
+- 0004_arctic_demo.sql
+- 0005_environment_cache.sql
+- 0006_research_station_reference.sql
 
-## 5. D1 schema
+Remote production snapshot during audit:
+- organizations: 1
+- users: 3
+- expeditions: 2
+- personnel: 12
+- cargo: 11
+- inventory items: 11
+- vehicles: 9
+- incidents: 0
+- telemetry positions: 0
+- public facilities: 114
+- research station reference rows: 82
 
-D1 contains:
+Missing for the requested production model:
+- processed mutation/idempotency table
+- version / updated_at conflict fields on conflict-sensitive records
+- richer audit-event table
+- restore metadata/versioning
 
+## 6. Frontend architecture
+
+public/static/app.js currently owns:
+- authentication/session token
+- API client
+- cache
+- offline queue
+- realtime/WebSocket lifecycle
+- router/navigation
+- global state
+- all page rendering
+- modal/toast behavior
+- Leaflet maps
+- forms/mutations
+- GPS/simulation helpers
+
+It remains a frontend god module and should be split only after backend boundaries and tests are stable.
+
+## 7. Offline architecture
+
+Current strengths:
+- GET cache fallback exists
+- offline mutations are retained
+- replay checks res.ok
+- 401, 409, 429, 500+ and network failures are distinguished
+- mutation status strings are already used during replay
+
+Current risks:
+- queue persistence is localStorage, not IndexedDB
+- a fetch/network failure while navigator.onLine remains true is not queued
+- mutation ID is added on replay, but normal online mutations do not consistently carry one
+- server has no processed-mutation idempotency store
+- no optimistic-concurrency version checks
+- no conflict-resolution UI/workflow
+- queue item bodies are untyped opaque JSON strings
+
+## 8. Authentication architecture
+
+Current:
+- PBKDF2-SHA256
+- HMAC-signed bearer token
+- 12-hour expiry
+- current_user dependency re-loads active user from D1
+- short-lived realtime tickets
+
+Risks / debt:
+- token stored in localStorage, increasing impact of any XSS
+- AUTH_SECRET helpers fall back to "dev-only-change-me" if binding is absent; production should fail closed
+- login/user/password routes remain in worker.py
+- auth repository/service boundary is not complete
+
+Authentication behavior should otherwise be preserved during structural migration.
+
+## 9. Authorization / tenant architecture
+
+Good:
+- organization comes from authenticated user, not browser
+- ensure_expedition_access checks expedition.organization_id against user.organization_id
+- most private endpoints call it
+- facilities/environment routes have started using explicit permissions
+
+Unresolved P0/P1 risk:
+several mutation schemas accept related IDs without proving those related records belong to the same expedition:
+- personnel.location_id
+- cargo origin/destination/current location IDs
+- inventory.location_id
+- vehicle.location_id
+- asset.location_id and assigned_to_personnel_id
+- incident.location_id / assigned vehicle flows
+- telemetry entity_id
+
+A tenant can potentially submit an ID from another expedition. Joins may then expose names/metadata across expedition boundaries or create logically corrupt relationships.
+
+This must be fixed before continuing cosmetic modularization.
+
+## 10. Backup architecture
+
+Current backup includes tenant-scoped:
 - organizations
 - users
 - expeditions
 - locations
 - personnel
-- cargo / cargo_events
-- inventory_items / inventory_events
+- cargo + cargo_events
+- inventory_items + inventory_events
 - vehicles
 - assets
-- incidents / incident_events
+- incidents + incident_events
 - activity
 - telemetry_positions
-- public_facilities
-- facility_weather
-- data_sources
-- external_cache
 
-Operational ownership is primarily inherited through `expedition_id -> expeditions.organization_id`.
-
-## 6. Frontend architecture
-
-`public/static/app.js` currently combines:
-
-- authentication/session handling
-- API client
-- caching
-- offline queue
-- WebSocket lifecycle
-- navigation/router
-- global state
-- modal/toast components
-- all page rendering
-- Leaflet maps
-- external-data UI
-- form submission workflows
-
-The file is functional but is a frontend god module.
-
-## 7. Offline architecture
-
-Current queue:
-
-- stored in `localStorage`
-- queues writes only when browser reports offline
-- replay uses raw `fetch()`
-- replay does not verify HTTP response status before deleting a queued mutation
-- no mutation status model
-- no idempotency key
-- no optimistic concurrency/version checking
-
-Critical reliability issue:
-
-A replayed request that returns HTTP 4xx/5xx can be removed from the queue even though the server rejected it.
-
-## 8. Authentication architecture
-
-Authentication currently uses:
-
-- PBKDF2-SHA256 password hashes using Workers Web Crypto
-- signed bearer tokens
-- 12 hour token expiry
-- centralized `current_user()` dependency
-
-This should be preserved during the first structural refactor.
-
-## 9. Authorization architecture
-
-Most HTTP entity routes correctly resolve the resource's expedition and call `ensure_expedition_access()`.
-
-Weaknesses:
-
-- role checks are scattered through `require("commander", ...)`
-- no explicit permission registry
-- WebSocket path bypasses expedition tenant authorization before Durable Object connection
-
-## 10. Backup architecture
-
-Current backup endpoint exports most current-state tables and telemetry.
+It also includes selected public reference tables.
 
 Problems:
-
-- `cargo_events`, `inventory_events`, and `incident_events` are declared in a table list but are not actually included in the tenant backup payload
-- restore validation does not exist
-- R2 storage silently fails because the current deployment has no `BACKUPS` binding
+- no restore endpoint/tool validation
+- no restore integration tests
+- R2 BACKUPS binding absent from production config
+- research_station_reference/external_cache are not part of the backup payload; this is acceptable if treated as reproducible reference/cache data, but should be documented explicitly
+- backup code remains in worker.py
 
 ## 11. External integrations
 
-Current integration logic is inside `worker.py`:
-
-- COMNAP facilities
+Already extracted:
+- COMNAP
 - Open-Meteo
-- NOAA/NSIDC sea ice
-- NOAA SWPC space weather
-- USGS seismic feed
-- authorized operations feed
+- NOAA/NSIDC
+- NOAA SWPC
+- USGS polar seismic
 
-External responses require normalization and validation boundaries outside HTTP routes.
+Still in worker.py:
+- authorized operations/worker feed
 
-## 12. Major architectural bugs
+Facility integration demonstrates the desired normalization boundary using a schema.
 
-P0/P1 findings:
+## 12. Major architectural bugs / reliability issues
 
-1. Cross-tenant WebSocket authorization gap.
-2. Offline replay treats network success as business success and ignores HTTP status.
-3. Backup omits operational event history.
-4. R2 backup configuration mismatch is swallowed.
-5. Multi-write workflows can partially commit.
-6. SQL and business logic are embedded in routes.
-7. Realtime event envelopes are inconsistent with an explicit event ID / occurred_at model.
-8. Frontend state, API, routing and page rendering are coupled.
+Highest unresolved:
+1. cross-expedition related-ID validation gaps
+2. no server idempotency for retries
+3. no optimistic concurrency
+4. no restore validation
+5. no automated security/offline/realtime test suite
+6. stale baseline test script
+7. AUTH_SECRET fallback should fail closed
+8. operations feed remains mixed into worker.py
+9. most routes still own SQL/business logic directly
+10. broadcaster silently swallows all realtime exceptions
 
 ## 13. Security risks
 
-- WebSocket room authorization is the highest priority.
-- Role checks are string-based and scattered.
-- Tenant authorization depends on every route remembering to call the correct helper.
-- telemetry writes are authenticated and expedition-scoped, but device/personnel ownership is not yet modeled.
-- demo credentials must not be retained for a real shared deployment.
+P0/P1:
+- cross-expedition foreign reference injection
+- lack of cross-tenant automated tests
+- fail-open development AUTH_SECRET fallback
+- browser bearer token in localStorage
+- device identity/authorization for telemetry is coarse: an authenticated user with expedition access can submit position records for arbitrary entity IDs unless entity ownership is validated
 
 ## 14. Data-integrity risks
 
-- cargo movement, inventory adjustment and incident creation each perform related writes separately
-- no idempotency handling for offline retries
-- no optimistic concurrency/version fields
-- backup/restore has no tested restore path
-- external feed failures are partially normalized but not consistently schema-validated
+- no version fields / expected_version checks
+- no mutation idempotency
+- some mutations still write entity state and activity in separate operations
+- incident code generation uses COUNT()+1 and can race
+- generic patch_row is still in worker.py
+- foreign-key relationships do not encode same-expedition ownership at the schema level
 
 ## 15. Technical debt
 
-- backend god module
-- frontend god module
-- no clean repositories/services boundary
-- no explicit domain permissions
-- no request ID/error envelope
-- no structured offline mutation state
-- no architecture-level test suite split by unit/integration/security/offline/realtime
+- worker.py still 1,140 lines
+- app.js still 815 lines
+- app.py route registration is incomplete
+- no tests/ directory
+- stale scripts/offline_checks.py assumptions
+- no standard error envelope/request IDs
+- no staging Cloudflare environment/resources
+- untracked generated screenshots/runtime artifacts in the working tree
+- documentation still contains some statements from earlier architecture states and needs synchronization
 
-## 16. Refactoring order
+## 16. Refactoring order from this snapshot
 
-1. P0 WebSocket tenant authorization
-2. Offline replay correctness
-3. Backup history coverage
-4. Atomic multi-write operations
-5. Core/database/security/realtime module extraction
-6. Auth + expedition repository/service/routes
-7. Personnel/cargo/inventory modules
-8. Vehicle/asset/incident/telemetry modules
-9. Integration modules
-10. Frontend core extraction
-11. IndexedDB/idempotency/versioning
-12. production hardening and test expansion
+P0 security first:
+1. same-expedition validation for all related resource IDs and telemetry entities
+2. fail closed when AUTH_SECRET is absent
+3. add security tests for tenant and WebSocket isolation
 
-The application must remain deployable and the existing D1 database must remain usable after every phase.
+P1 reliability:
+4. baseline test harness and repair stale checks
+5. server-side mutation idempotency
+6. IndexedDB offline queue
+7. optimistic concurrency/version fields
+8. backup restore validation
+
+P2 backend boundaries:
+9. auth/users/organizations
+10. expeditions/locations
+11. personnel
+12. cargo
+13. inventory
+14. vehicles/assets
+15. incidents
+16. telemetry/dashboard
+17. operations feed
+18. activity/backups/static routing
+
+P3:
+19. standard errors/request IDs/logging
+20. frontend ES-module extraction
+21. environment isolation/staging
+22. CI smoke/security/offline/realtime tests
+
+The application must remain deployable and the existing D1 database must remain usable after every step.
