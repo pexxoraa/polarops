@@ -96,14 +96,14 @@ def _js_obj(value):
     return _to_js(value, dict_converter=Object.fromEntries)
 
 
-_ENCODER = TextEncoder.new()
-_BUFFER_FROM = getattr(Buffer, "from")
-
-
 async def _pbkdf2_bits(password: str, salt_js, rounds: int):
+    # Do not keep JavaScript object instances in module-level globals.
+    # Python Workers snapshot top-level state during deployment, and objects
+    # such as TextEncoder instances are not serializable.
+    encoder = TextEncoder.new()
     key = await crypto.subtle.importKey(
         "raw",
-        _ENCODER.encode(password),
+        encoder.encode(password),
         "PBKDF2",
         False,
         ["deriveBits"],
@@ -128,9 +128,9 @@ async def hash_password(password: str) -> str:
     digest = await _pbkdf2_bits(password, salt, 180_000)
     return (
         "pbkdf2_sha256$180000$"
-        + str(_BUFFER_FROM(salt).toString("base64"))
+        + str(getattr(Buffer, "from")(salt).toString("base64"))
         + "$"
-        + str(_BUFFER_FROM(digest).toString("base64"))
+        + str(getattr(Buffer, "from")(digest).toString("base64"))
     )
 
 
@@ -139,8 +139,9 @@ async def verify_password(password: str, encoded: str) -> bool:
         algo, rounds, salt_b64, digest_b64 = encoded.split("$", 3)
         if algo != "pbkdf2_sha256":
             return False
-        salt = _BUFFER_FROM(salt_b64, "base64")
-        expected = _BUFFER_FROM(digest_b64, "base64")
+        buffer_from = getattr(Buffer, "from")
+        salt = buffer_from(salt_b64, "base64")
+        expected = buffer_from(digest_b64, "base64")
         actual = await _pbkdf2_bits(password, salt, int(rounds))
         return bool(crypto.subtle.timingSafeEqual(actual, expected))
     except Exception:
