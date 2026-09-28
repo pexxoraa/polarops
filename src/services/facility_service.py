@@ -23,6 +23,12 @@ from repositories.facilities import (
 )
 from repositories.locations import upsert_external_location
 from realtime.broadcaster import broadcast
+from services.station_verification import (
+    CURRENT_COMNAP_INFO_URL,
+    CURRENT_COMNAP_PERIOD,
+    enrich_current_facility,
+    verify_historical_reference,
+)
 
 
 async def get_data_sources(env) -> dict:
@@ -77,10 +83,12 @@ async def get_public_directory(
     offset: int = 0,
 ) -> dict:
     result = await list_public_facilities(env, country, query, limit, offset)
+    result["items"] = [enrich_current_facility(row) for row in result.get("items", [])]
     result.update({
         "source": "COMNAP",
         "source_url": env_value(env, "COMNAP_FACILITIES_URL", DEFAULT_COMNAP_URL),
-        "source_period": "November 2024",
+        "source_info_url": CURRENT_COMNAP_INFO_URL,
+        "source_period": CURRENT_COMNAP_PERIOD,
     })
     return result
 
@@ -157,15 +165,22 @@ async def import_facility(
 
 async def get_research_station_reference(env) -> dict:
     rows = await list_research_station_reference(env)
+    current = await list_public_facilities(env, None, None, 2000, 0)
+    verification = verify_historical_reference(rows, current.get("items", []))
     return {
-        "items": rows,
+        **verification,
         "total": len(rows),
         "source": "COMNAP Research Stations Map",
         "source_period": "1998-2005",
         "source_url": "/research-stations-map.pdf",
-        "classification": "historical_reference",
+        "classification": "historical_reference_verified",
+        "current_source": "COMNAP Antarctic Facilities List",
+        "current_source_period": CURRENT_COMNAP_PERIOD,
+        "current_source_url": env_value(env, "COMNAP_FACILITIES_URL", DEFAULT_COMNAP_URL),
+        "current_source_info_url": CURRENT_COMNAP_INFO_URL,
         "warning": (
-            "Historical station list from the supplied COMNAP map. "
-            "Use the November 2024 COMNAP Facilities directory for current facility status."
+            "Historical station list from the supplied COMNAP map, verified against the "
+            "November 2024 COMNAP current facilities directory. Historical entries never "
+            "overwrite current operational status."
         ),
     }

@@ -164,3 +164,14 @@ body[data-pole="north"] .polar-switch button[data-pole="north"].active{backgroun
 .reference-source-note{display:flex;justify-content:space-between;gap:14px;margin:0 0 9px;padding:8px 10px;border:1px solid #ded8f2;border-radius:7px;background:#f8f6ff;color:#5d5574;font-size:8px}
 .reference-source-note strong{color:#4d3f7f}.reference-table-wrap{max-height:390px;overflow:auto}
 @media(max-width:760px){.reference-source-note{display:block}.reference-source-note span{display:block;margin-top:4px}}
+
+
+/* Historical/current Antarctic station verification */
+.verification-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:10px 0}
+.verification-summary>div{background:#f7fbfe;border:1px solid #d7e5ef;border-radius:8px;padding:9px 10px}
+.verification-summary span{display:block;font-size:7px;text-transform:uppercase;letter-spacing:.55px;color:#70879a;font-weight:800}
+.verification-summary strong{display:block;margin-top:4px;font-size:17px;color:#173a52}
+.historical-stations-panel td small,.current-additions-panel td small{display:block;margin-top:3px;line-height:1.4;color:#7c8f9f}
+.current-additions-panel .table-wrap{max-height:520px;overflow:auto}
+@media(max-width:980px){.verification-summary{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.verification-summary{grid-template-columns:1fr}}
