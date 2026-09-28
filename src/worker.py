@@ -14,11 +14,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import asgi
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
-from workers import DurableObject, Response, WorkerEntrypoint, fetch as cf_fetch
+from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf_fetch
 from js import WebSocketPair
 
 APP_VERSION = "2.0.0-cloudflare"
