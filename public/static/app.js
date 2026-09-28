@@ -13,7 +13,7 @@
     fallbackTimer:null, deferredRealtime:false,
     gpsWatchId:null, gpsPersonnelId:null, gpsLastSent:0,
     vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null,
-    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}
+    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}, renderInProgress:false
   };
 
   const navItems=[
@@ -115,16 +115,19 @@
     if(Number(message.expedition_id)!==Number(state.expeditionId))return;
     if(message.type==='incident.created')toast('Live SOS received',message.data?.code||'New incident','danger',4200);
 
-    // Telemetry can arrive every few seconds. Updating the Leaflet marker in
-    // place avoids re-fetching the full dashboard and reloading map tiles.
-    if(message.type==='telemetry.updated' && state.view==='overview' && state.liveMap){
-      if(updateLiveTelemetryMarker(message))return;
+    // Telemetry is high-frequency. Never rebuild the dashboard for telemetry:
+    // move existing markers in place and wait for the next intentional data
+    // refresh to reconcile any newly-added telemetry entities.
+    if(message.type?.startsWith('telemetry.')){
+      if(message.type==='telemetry.updated' && state.view==='overview' && state.liveMap){
+        updateLiveTelemetryMarker(message);
+      }
+      return;
     }
 
     if($('#modalRoot')?.children.length){state.deferredRealtime=true;return}
     clearTimeout(state.realtimeRender);
-    const delay=message.type?.startsWith('telemetry.')?900:350;
-    state.realtimeRender=setTimeout(()=>renderView(),delay);
+    state.realtimeRender=setTimeout(()=>renderView(),450);
   }
 
   function updateLiveTelemetryMarker(message){
@@ -146,8 +149,13 @@
     clearInterval(state.fallbackTimer);
     state.fallbackTimer=setInterval(()=>{
       if(!state.token||!navigator.onLine||state.realtimeStatus==='live'||document.hidden||$('#modalRoot')?.children.length)return;
+
+      // A complete overview rebuild destroys/recreates Leaflet and looks like
+      // a page refresh. Keep the command dashboard stable while WebSocket is
+      // reconnecting. Other list views can still use the fallback refresh.
+      if(state.view==='overview')return;
       renderView();
-    },10000);
+    },30000);
   }
 
   window.addEventListener('online',()=>{state.online=true;updateSync();flushQueue();connectRealtime()});
@@ -266,11 +274,17 @@
   async function navigate(view){ state.view=view; $$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); await renderView(); }
   function setHeader(title,subtitle){ const exp=state.expeditions.find(e=>e.id===state.expeditionId); $('#pageTitle').textContent=title;$('#pageSubtitle').textContent=subtitle||'';$('#crumb').textContent=`POLAR OPERATIONS / ${exp?.name||''}`; document.title=`${title} — PolarOps`; }
   async function renderView(){
-    destroyLiveMap();
-    const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
+    if(state.renderInProgress)return;
+    state.renderInProgress=true;
     try{
-      if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
-    }catch(e){ v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger'); }
+      destroyLiveMap();
+      const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
+      try{
+        if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
+      }catch(e){ v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger'); }
+    }finally{
+      state.renderInProgress=false;
+    }
   }
 
   async function renderOverview(){
