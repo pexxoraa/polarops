@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "wrangler": "^4.64.0"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
   }
 }
