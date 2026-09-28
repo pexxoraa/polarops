@@ -414,15 +414,22 @@ R2 is intended for durable backup/export objects once the `BACKUPS` bucket bindi
 - D1/binding/API inventory
 - migration plan
 
-**Phase 1 - Critical security/reliability: implemented in the current working tree**
+**Phase 1 - Critical security/reliability: complete and deployed in 2.1.0-cloudflare**
 - WebSocket tenant pre-authorization with short-lived ticket
 - HTTP-aware offline replay
 - D1 batch operations for critical cargo/inventory/incident workflows
 - event-history backup coverage
 - explicit R2 backup status
 
+**Phase 2 - Backend modular boundaries: started**
+- extracted `core/config.py`
+- extracted `core/security.py`
+- extracted `core/time.py`
+- extracted `database/d1.py`
+- deployed and browser-smoke-tested the extracted modules
+
 **Next**
-- extract core/database/security/realtime modules
+- extract realtime and integration modules
 - migrate domain routes to service/repository layers one domain at a time
 - split the frontend into ES modules
 - move offline queue to IndexedDB

@@ -15,15 +15,17 @@ Status: COMPLETE
 
 ## Phase 1 - Critical security and reliability
 
-Status: IN PROGRESS
+Status: COMPLETE - deployed as PolarOps 2.1.0-cloudflare
 
-1. Authorize WebSocket expedition access before Durable Object room entry.
-2. Preserve rejected offline mutations instead of deleting them.
-3. Include cargo/inventory/incident event history in backups.
-4. Make multi-write operational mutations atomic with D1 batch.
-5. Stop silently presenting R2 backup as successful when the binding is unavailable.
+1. WebSocket expedition access is pre-authorized with a short-lived server-issued ticket before Durable Object room entry.
+2. Rejected offline mutations remain queued with PENDING / FAILED / CONFLICT state instead of being silently deleted.
+3. Backups include cargo, inventory and incident event history.
+4. Critical cargo, inventory and incident multi-write workflows use D1 batch operations and broadcast only after persistence succeeds.
+5. Missing R2 backup configuration is reported explicitly instead of being silently swallowed.
 
 ## Phase 2 - Backend modular boundaries
+
+Status: STARTED - core configuration, security/time helpers and D1 access are now extracted from `worker.py`.
 
 Extract without breaking routes:
 

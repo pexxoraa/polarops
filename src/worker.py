@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import csv
 import hashlib
-import hmac
 import io
 import json
 import math
@@ -19,107 +17,42 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf_fetch
-from js import Object, TextEncoder, Uint8Array, WebSocketPair, crypto
-from pyodide.ffi import to_js as _to_js
+from js import WebSocketPair
 
-APP_VERSION = "2.1.0-cloudflare"
-DEFAULT_COMNAP_URL = "https://www.comnap.aq/s/Facilities_Nov2024.csv"
-DEFAULT_OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-DEFAULT_NSIDC_BASE = "https://noaadata.apps.nsidc.org/NOAA/G02135"
-DEFAULT_SWPC_KP_URL = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
-DEFAULT_SWPC_OVATION_BASE = "https://services.swpc.noaa.gov/products/animations"
-DEFAULT_USGS_EVENT_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
-TOKEN_HOURS = 12
+from core.config import (
+    APP_VERSION,
+    DEFAULT_COMNAP_URL,
+    DEFAULT_NSIDC_BASE,
+    DEFAULT_OPEN_METEO_URL,
+    DEFAULT_SWPC_KP_URL,
+    DEFAULT_SWPC_OVATION_BASE,
+    DEFAULT_USGS_EVENT_URL,
+    env_value,
+)
+from core.security import (
+    decode_token,
+    decode_ws_ticket,
+    hash_password,
+    make_token,
+    make_ws_ticket,
+    verify_password,
+)
+from core.time import utcnow
+from database.d1 import (
+    last_row_id,
+    q_all,
+    q_batch,
+    q_first,
+    q_value,
+    q_write,
+    q_write_batch,
+    to_py,
+)
 
 app = FastAPI(title="PolarOps Cloudflare", version=APP_VERSION)
 
 
 # ----------------------------- Generic helpers -----------------------------
-
-def utcnow() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def env_value(env, name: str, default: str = "") -> str:
-    try:
-        value = getattr(env, name)
-        if value is None:
-            return default
-        return str(value)
-    except Exception:
-        return default
-
-
-def to_py(value):
-    if value is None:
-        return None
-    try:
-        return value.to_py()
-    except Exception:
-        return value
-
-
-async def q_all(env, sql: str, *params) -> list[dict]:
-    stmt = env.DB.prepare(sql)
-    if params:
-        stmt = stmt.bind(*params)
-    result = await stmt.run()
-    rows = to_py(result.results)
-    return list(rows or [])
-
-
-async def q_first(env, sql: str, *params) -> Optional[dict]:
-    stmt = env.DB.prepare(sql)
-    if params:
-        stmt = stmt.bind(*params)
-    row = await stmt.first()
-    row = to_py(row)
-    return dict(row) if row else None
-
-
-async def q_value(env, sql: str, *params, key: str = "c"):
-    row = await q_first(env, sql, *params)
-    return row.get(key) if row else None
-
-
-async def q_write(env, sql: str, *params):
-    stmt = env.DB.prepare(sql)
-    if params:
-        stmt = stmt.bind(*params)
-    return await stmt.run()
-
-
-async def q_batch(env, queries: list[tuple[str, tuple]]) -> list[list[dict]]:
-    """Execute read queries in one D1 round trip.
-
-    Cloudflare documents D1 batch() as a major latency optimization because it
-    avoids one network round trip per statement. Results are returned in the
-    same order as the prepared statements.
-    """
-    statements = []
-    for sql, params in queries:
-        stmt = env.DB.prepare(sql)
-        if params:
-            stmt = stmt.bind(*params)
-        statements.append(stmt)
-    results = await env.DB.batch(statements)
-    output = []
-    for result in results:
-        rows = to_py(result.results)
-        output.append(list(rows or []))
-    return output
-
-
-async def q_write_batch(env, queries: list[tuple[str, tuple]]):
-    """Execute related D1 statements atomically using D1 batch()."""
-    statements = []
-    for sql, params in queries:
-        stmt = env.DB.prepare(sql)
-        if params:
-            stmt = stmt.bind(*params)
-        statements.append(stmt)
-    return await env.DB.batch(statements)
-
 
 async def cache_get_json(env, cache_key: str, max_age_seconds: int):
     row = await q_first(env, "SELECT payload_json,fetched_at FROM external_cache WHERE cache_key=?", cache_key)
@@ -342,131 +275,6 @@ async def environment_earthquakes(env, pole: str, force: bool = False) -> dict:
     }
     await cache_put_json(env, key, payload)
     return payload
-
-
-def last_row_id(result) -> int:
-    try:
-        return int(result.meta.last_row_id)
-    except Exception:
-        meta = to_py(getattr(result, "meta", {})) or {}
-        return int(meta.get("last_row_id") or 0)
-
-
-def _js_obj(value):
-    return _to_js(value, dict_converter=Object.fromEntries)
-
-
-async def _pbkdf2_bytes(password: str, salt: bytes, rounds: int) -> bytes:
-    # Use Workers Web Crypto for PBKDF2, but keep encoding/decoding in Python.
-    # Pyodide converts Python bytes to a JS TypedArray and JS TypedArrays back
-    # to Python memoryviews, avoiding Node Buffer interop differences.
-    encoder = TextEncoder.new()
-    key = await crypto.subtle.importKey(
-        "raw",
-        encoder.encode(password),
-        "PBKDF2",
-        False,
-        _to_js(["deriveBits"]),
-    )
-    salt_js = _to_js(salt)
-    bits = await crypto.subtle.deriveBits(
-        _js_obj({
-            "name": "PBKDF2",
-            "salt": salt_js,
-            "iterations": int(rounds),
-            "hash": "SHA-256",
-        }),
-        key,
-        256,
-    )
-    return bytes(Uint8Array.new(bits).to_py())
-
-
-async def hash_password(password: str) -> str:
-    salt_js = crypto.getRandomValues(Uint8Array.new(16))
-    salt = bytes(salt_js.to_py())
-    digest = await _pbkdf2_bytes(password, salt, 100_000)
-    return (
-        "pbkdf2_sha256$100000$"
-        + base64.urlsafe_b64encode(salt).decode()
-        + "$"
-        + base64.urlsafe_b64encode(digest).decode()
-    )
-
-
-async def verify_password(password: str, encoded: str) -> bool:
-    try:
-        algo, rounds, salt_b64, digest_b64 = encoded.split("$", 3)
-        if algo != "pbkdf2_sha256":
-            return False
-        salt = base64.urlsafe_b64decode(salt_b64.encode())
-        expected = base64.urlsafe_b64decode(digest_b64.encode())
-        actual = await _pbkdf2_bytes(password, salt, int(rounds))
-        return hmac.compare_digest(actual, expected)
-    except Exception as exc:
-        # Safe diagnostic: do not log the password, salt, digest or token.
-        print(f"AUTH_VERIFY_ERROR {type(exc).__name__}: {exc}")
-        return False
-
-
-def make_token(user: dict, secret: str) -> str:
-    payload = {
-        "uid": user["id"],
-        "oid": user["organization_id"],
-        "email": user["email"],
-        "role": user["role"],
-        "exp": int(time.time() + TOKEN_HOURS * 3600),
-    }
-    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
-    sig = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
-    return raw + "." + base64.urlsafe_b64encode(sig).decode().rstrip("=")
-
-
-def decode_token(token: str, secret: str) -> dict:
-    try:
-        raw, sig = token.split(".", 1)
-        expected = base64.urlsafe_b64encode(
-            hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
-        ).decode().rstrip("=")
-        if not hmac.compare_digest(sig, expected):
-            raise ValueError("bad signature")
-        payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-        if payload.get("exp", 0) < time.time():
-            raise ValueError("expired")
-        return payload
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-
-
-def make_ws_ticket(user: dict, expedition_id: int, secret: str, ttl_seconds: int = 60) -> str:
-    payload = {
-        "uid": int(user["id"]),
-        "oid": int(user["organization_id"]),
-        "eid": int(expedition_id),
-        "exp": int(time.time() + ttl_seconds),
-        "purpose": "expedition_ws",
-    }
-    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
-    sig = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
-    return raw + "." + base64.urlsafe_b64encode(sig).decode().rstrip("=")
-
-
-def decode_ws_ticket(ticket: str, secret: str) -> dict:
-    try:
-        raw, sig = ticket.split(".", 1)
-        expected = base64.urlsafe_b64encode(
-            hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
-        ).decode().rstrip("=")
-        if not hmac.compare_digest(sig, expected):
-            raise ValueError("bad signature")
-        payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-        if payload.get("purpose") != "expedition_ws":
-            raise ValueError("wrong purpose")
-        if int(payload.get("exp", 0)) < int(time.time()):
-            raise ValueError("expired")
-        return payload
-    except Exception as exc:
-        raise ValueError("Invalid or expired realtime ticket") from exc
 
 
 async def current_user(request: Request) -> dict:
