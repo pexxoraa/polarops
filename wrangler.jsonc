@@ -19,13 +19,6 @@
     }
   ],
 
-  "r2_buckets": [
-    {
-      "binding": "BACKUPS",
-      "bucket_name": "polarops-backups"
-    }
-  ],
-
   "durable_objects": {
     "bindings": [
       {
