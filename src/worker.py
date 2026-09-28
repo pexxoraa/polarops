@@ -126,12 +126,10 @@ async def hash_password(password: str) -> str:
     # instead; PBKDF2 is implemented natively by the Workers runtime.
     salt = crypto.getRandomValues(Uint8Array.new(16))
     digest = await _pbkdf2_bits(password, salt, 180_000)
-    return (
-        "pbkdf2_sha256$180000$"
-        + str(getattr(Buffer, "from")(salt).toString("base64"))
-        + "$"
-        + str(getattr(Buffer, "from")(digest).toString("base64"))
-    )
+    buffer_from = getattr(Buffer, "from")
+    salt_b64 = str(buffer_from(salt).toString("base64")).replace("+", "-").replace("/", "_")
+    digest_b64 = str(buffer_from(digest).toString("base64")).replace("+", "-").replace("/", "_")
+    return "pbkdf2_sha256$180000$" + salt_b64 + "$" + digest_b64
 
 
 async def verify_password(password: str, encoded: str) -> bool:
