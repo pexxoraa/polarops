@@ -395,12 +395,12 @@
     const missionCoords=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
     const pole=poleForRegion(expedition?.region);
     const fallback=pole==='north'?[78.7,15]:[-75,40];
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView(fallback,pole==='north'?4:3);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:false,worldCopyJump:false,minZoom:2,maxZoom:18,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView(fallback,pole==='north'?4:3);
     const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
-      maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
+      maxZoom:18,updateWhenIdle:true,keepBuffer:1
     });
     const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{
-      maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
+      maxZoom:18,updateWhenIdle:true,keepBuffer:1
     });
     const missionLayer=L.layerGroup().addTo(state.liveMap);
     const researchLayer=L.layerGroup();
@@ -416,6 +416,7 @@
     if(pole==='north'&&arcticVerified.length)overlays[`Verified research sites (${arcticVerified.length})`]=arcticVerifiedLayer;
     if(pole==='north'&&arcticReference.length)overlays[`Reference-only sites (${arcticReference.length})`]=arcticReferenceLayer;
     L.control.layers({'Satellite':satellite,'Topographic':topo},overlays,{position:'topright',collapsed:false}).addTo(state.liveMap);
+    addMapDataControl(state.liveMap);
     const base=fixed.find(x=>/base|station|hub/i.test(`${x.name} ${x.type}`))||fixed[0];
     if(base){
       fixed.filter(x=>x.id!==base.id).forEach(x=>L.polyline([[+base.latitude,+base.longitude],[+x.latitude,+x.longitude]],{color:'#0b78e3',weight:2,dashArray:'7 7',opacity:.65}).addTo(missionLayer));
@@ -480,6 +481,32 @@
     if(overviewCoords.length===1)state.liveMap.setView(overviewCoords[0],7);
     else if(overviewCoords.length>1)state.liveMap.fitBounds(L.latLngBounds(overviewCoords).pad(.08),{maxZoom:pole==='south'?4:pole==='north'?4:7,animate:false});
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
+  }
+
+  function addMapDataControl(map){
+    if(!map||!window.L)return;
+    const control=L.control({position:'bottomright'});
+    control.onAdd=()=>{
+      const div=L.DomUtil.create('div','map-data-control');
+      div.innerHTML=`<button type="button" class="map-data-toggle" aria-expanded="false" title="Map data attribution">⒐ Map data</button>
+        <div class="map-data-popover" hidden>
+          <strong>Basemap attribution</strong>
+          <span>Powered by Esri. Basemap imagery/topographic data © Esri and contributing data providers.</span>
+          <a href="https://support.esri.com/en-us/knowledge-base/what-is-the-correct-way-to-cite-an-arcgis-online-basema-000012040" target="_blank" rel="noopener">Full provider attribution ←</a>
+        </div>`;
+      const button=div.querySelector('.map-data-toggle');
+      const pop=div.querySelector('.map-data-popover');
+      button.addEventListener('click',e=>{
+        e.preventDefault();e.stopPropagation();
+        const open=pop.hidden;
+        pop.hidden=!open;
+        button.setAttribute('aria-expanded',open?'true':'false');
+      });
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      return div;
+    };
+    control.addTo(map);
   }
 
   function addMissionMapLegend(map,pole,counts={}){
@@ -827,14 +854,15 @@
     const mission=locs.filter(l=>Number.isFinite(+l.latitude)&&Number.isFinite(+l.longitude)&&+l.latitude>=50);
     const verified=stations.filter(r=>String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
     const reference=stations.filter(r=>!String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([72,0],3);
-    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
-    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:false,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([72,0],3);
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1});
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1});
     const missionLayer=L.layerGroup().addTo(state.liveMap);
     const verifiedLayer=L.layerGroup().addTo(state.liveMap);
     const referenceLayer=L.layerGroup();
     topo.addTo(state.liveMap);
     L.control.layers({'Topographic':topo,'Satellite':satellite},{'Mission locations':missionLayer,[`Verified current research (${verified.length})`]:verifiedLayer,[`Reference only (${reference.length})`]:referenceLayer},{position:'topright',collapsed:false}).addTo(state.liveMap);
+    addMapDataControl(state.liveMap);
     mission.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(missionLayer).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
     verified.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:5,weight:1.4,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88}).addTo(verifiedLayer).bindTooltip(esc(r.name),{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED CURRENT</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br>${esc(r.operating_country||'')}<br><small>${esc(r.verification_source||'')}</small>${r.verification_url?`<br><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a>`:''}</div>`));
     reference.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:4,weight:1.1,color:'#7d8994',fillColor:'#a8b1b8',fillOpacity:.70}).addTo(referenceLayer).bindTooltip(`${esc(r.name)} · reference only`,{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">REFERENCE ONLY</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br><small>${esc(r.verification_note||'Not independently verified current.')}</small></div>`));
@@ -923,11 +951,12 @@
     if(!el||!window.L)return;
     destroyLiveMap();
     const points=facilities.filter(f=>f.geographic_scope==='antarctic_treaty_area'&&Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude));
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([-74,20],2);
-    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
-    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:false,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([-74,20],2);
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1});
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1});
     topo.addTo(state.liveMap);
     L.control.layers({'Topographic':topo,'Satellite':satellite},null,{position:'topright',collapsed:true}).addTo(state.liveMap);
+    addMapDataControl(state.liveMap);
     points.forEach(f=>{
       const open=String(f.status||'').toLowerCase()==='open';
       L.circleMarker([+f.latitude,+f.longitude],{radius:5,weight:1.5,color:open?'#0877d4':'#d48a16',fillColor:open?'#118bea':'#f2a52a',fillOpacity:.86}).addTo(state.liveMap)
