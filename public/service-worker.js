@@ -1,5 +1,5 @@
-const CACHE='polarops-shell-v11-click-fix';
-const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=5','/static/app.js?v=7','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
+const CACHE='polarops-shell-v12-facility-map';
+const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=6','/static/app.js?v=8','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
 
 self.addEventListener('install',e=>e.waitUntil(
   caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())

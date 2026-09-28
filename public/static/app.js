@@ -616,11 +616,13 @@
         <div><span>Current weather</span><strong>Open-Meteo</strong></div>
         <div class="source-note"><strong>${esc(comnap?.last_status||'Never synced')}</strong><span>${comnap?.last_sync?`Last facility sync ${fmtDate(comnap.last_sync)}`:'Sync the official COMNAP facilities CSV to populate the global directory.'}</span></div>
       </div>
+      <section class="panel network-map-panel"><div class="panel-head"><div><h2>Antarctic Facilities Map</h2><p>Official COMNAP public facility coordinates shown on an interactive reference map.</p></div><span class="badge info">${facilities.length} facilities</span></div>${facilities.length?'<div id="facilityNetworkMap" class="facility-network-map"></div><div class="live-map-note"><span>● Public infrastructure reference — not live occupancy</span><span>COMNAP November 2024 · Esri basemap</span></div>':'<div class="empty" style="min-height:220px"><div><strong>No facility map data yet</strong>Sync COMNAP to populate the official public facility directory.</div></div>'}</section>
       <section class="panel"><div class="panel-head"><div><h2>Antarctic Facilities Directory</h2><p>Reference facilities from national Antarctic programmes. This directory is public infrastructure metadata—not permission to use another operator's facility.</p></div><div class="panel-actions"><input class="search" id="facilitySearch" placeholder="Station, country or programme…"><select class="search" id="facilityCountry"><option value="">All countries</option>${countries.map(c=>`<option value="${esc(c.country)}">${esc(c.country)} (${c.count})</option>`).join('')}</select>${roleCan('commander','logistics')?'<button class="button secondary" id="syncFacilities">↻ Sync COMNAP</button>':''}</div></div>
         ${facilities.length?`<div class="table-wrap"><table><thead><tr><th>Facility</th><th>Country / Programme</th><th>Type</th><th>Operation</th><th>Coordinates</th><th>Current conditions</th><th>Actions</th></tr></thead><tbody id="facilityRows"></tbody></table></div>`:`<div class="empty" style="min-height:320px"><div><strong>No public facilities synchronized yet</strong>Press “Sync COMNAP” to download the official COMNAP Antarctic Facilities List into PolarOps. Internet access is required for the first sync.</div></div>`}
       </section>
       <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>Keep public reference data separate from private operational data.</p></div></div><div class="data-boundary-grid"><div><strong>Public reference</strong><span>Facility names, operators, coordinates and status from COMNAP.</span></div><div><strong>Live environment</strong><span>Current model conditions for facility coordinates from Open-Meteo; not a station instrument feed.</span></div><div><strong>Workers</strong><span>Live worker rosters/locations come only from your authorized feed, field check-ins or consented device GPS. PolarOps does not scrape people.</span></div></div></section>`;
     if(facilities.length){
+      initFacilityNetworkMap(facilities);
       const paint=()=>{
         const q=($('#facilitySearch')?.value||'').toLowerCase(), country=$('#facilityCountry')?.value||'';
         const shown=facilities.filter(f=>(!country||f.country===country)&&[f.name,f.country,f.programme,f.facility_type,f.status].join(' ').toLowerCase().includes(q));
@@ -643,6 +645,25 @@
       } catch(err){toast('COMNAP sync failed',err.message,'danger',6000);b.disabled=false;b.textContent='↻ Sync COMNAP'}
     };
   }
+  function initFacilityNetworkMap(facilities){
+    const el=$('#facilityNetworkMap');
+    if(!el||!window.L)return;
+    destroyLiveMap();
+    const points=facilities.filter(f=>Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude<=-50);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false}).setView([-74,20],2);
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    topo.addTo(state.liveMap);
+    L.control.layers({'Topographic':topo,'Satellite':satellite},null,{position:'topright',collapsed:true}).addTo(state.liveMap);
+    points.forEach(f=>{
+      const open=String(f.status||'').toLowerCase()==='open';
+      L.circleMarker([+f.latitude,+f.longitude],{radius:5,weight:1.5,color:open?'#0877d4':'#d48a16',fillColor:open?'#118bea':'#f2a52a',fillOpacity:.86}).addTo(state.liveMap)
+        .bindPopup(`<strong>${esc(f.name)}</strong><br>${esc(f.country||'Antarctic programme')} · ${esc(f.facility_type||'Facility')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small>`);
+    });
+    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(f=>[+f.latitude,+f.longitude])).pad(.04),{maxZoom:4});
+    setTimeout(()=>state.liveMap?.invalidateSize(),60);
+  }
+
   function facilityRow(f){
     const weather=f.weather_observed_at?`<strong>${f.temperature_c==null?'—':`${n(f.temperature_c,1)} °C`}</strong><small>${f.wind_speed_kph==null?'':`${n(f.wind_speed_kph,1)} km/h wind · `}${fmtDate(f.weather_observed_at)} UTC</small>`:'<span class="muted">Not loaded</span>';
     return `<tr><td><strong>${esc(f.name)}</strong><small>${esc(f.status||'Status not supplied')}</small></td><td><strong>${esc(f.country||'—')}</strong><small>${esc(f.programme||'Programme not supplied')}</small></td><td>${badge(f.facility_type||'Facility','info')}</td><td>${esc(f.seasonality||'—')}</td><td class="mono"><strong>${f.latitude==null?'—':n(f.latitude,5)}</strong><small>${f.longitude==null?'—':n(f.longitude,5)}</small></td><td>${weather}</td><td><div class="row-actions"><button class="icon-btn" data-facility-weather="${f.id}">Weather</button>${roleCan('commander','logistics')?`<button class="icon-btn" data-facility-import="${f.id}">Add to mission</button>`:''}</div></td></tr>`;
