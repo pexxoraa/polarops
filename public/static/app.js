@@ -18,7 +18,7 @@
 
   const navItems=[
     ['overview','⌂','Dashboard'],['personnel','◎','Personnel'],['cargo','▣','Cargo'],['inventory','▤','Inventory'],
-    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Incidents'],['network','⌖','Antarctic Network'],['activity','≡','Activity'],['settings','⚙','Settings']
+    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Incidents'],['environment','◉','Environment'],['network','⌖','Facility Network'],['activity','≡','Activity'],['settings','⚙','Settings']
   ];
 
   function saveQueue(){ localStorage.setItem(queueKey,JSON.stringify(state.pending)); updateSync(); }
@@ -125,6 +125,7 @@
       return;
     }
 
+    if(state.view==='overview')return;
     if($('#modalRoot')?.children.length){state.deferredRealtime=true;return}
     clearTimeout(state.realtimeRender);
     state.realtimeRender=setTimeout(()=>renderView(),450);
@@ -280,7 +281,7 @@
       destroyLiveMap();
       const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
       try{
-        if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
+        if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='environment')await renderEnvironment(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
       }catch(e){ v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger'); }
     }finally{
       state.renderInProgress=false;
@@ -395,7 +396,7 @@
   async function loadLocations(){ return api(`/api/locations?expedition_id=${state.expeditionId}`); }
   function locationOptions(locations,selected){ return `<option value="">Unassigned</option>`+locations.map(l=>`<option value="${l.id}" ${Number(selected)===l.id?'selected':''}>${esc(l.name)}</option>`).join(''); }
   function modal(title,subtitle,body,wide=false){ $('#modalRoot').innerHTML=`<div class="modal-backdrop"><div class="modal ${wide?'wide':''}"><div class="modal-head"><div><span class="eyebrow">POLAROPS WORKFLOW</span><h2>${esc(title)}</h2>${subtitle?`<p>${esc(subtitle)}</p>`:''}</div><button class="modal-close">×</button></div>${body}</div></div>`; $('.modal-close').onclick=closeModal; $('.modal-backdrop').onclick=e=>{if(e.target.classList.contains('modal-backdrop'))closeModal()}; }
-  function closeModal(){ $('#modalRoot').innerHTML=''; if(state.deferredRealtime){state.deferredRealtime=false;clearTimeout(state.realtimeRender);state.realtimeRender=setTimeout(()=>renderView(),100)} }
+  function closeModal(){ $('#modalRoot').innerHTML=''; if(state.deferredRealtime){state.deferredRealtime=false;clearTimeout(state.realtimeRender);if(state.view!=='overview')state.realtimeRender=setTimeout(()=>renderView(),250)} }
   function formVal(form,name){ return form.elements[name]?.value ?? ''; }
   function numOrNull(v){ return v===''?null:Number(v); }
 
@@ -531,6 +532,74 @@
   async function openIncidentCreate(){ const locs=await loadLocations(); modal('Trigger emergency','Create an incident and assemble response context immediately.',`<form id="incidentForm"><div class="form-grid"><div class="field"><label>Incident title</label><input name="title" value="Field Emergency" required></div><div class="field"><label>Type</label><select name="type"><option>Field Emergency</option><option>Medical</option><option>Vehicle</option><option>Weather</option><option>Missing Personnel</option><option>Fire</option></select></div><div class="field"><label>Severity</label><select name="severity"><option>Critical</option><option selected>High</option><option>Medium</option><option>Low</option></select></div><div class="field"><label>Location</label><select name="location_id" required>${locationOptions(locs)}</select></div><div class="field"><label>Personnel affected</label><input type="number" name="affected_count" min="0" value="0"></div><div class="field full"><label>Description</label><textarea name="description" placeholder="What happened and what is known right now?"></textarea></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button danger">Trigger incident</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#incidentForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={expedition_id:state.expeditionId,title:formVal(f,'title'),type:formVal(f,'type'),severity:formVal(f,'severity'),location_id:Number(formVal(f,'location_id')),description:formVal(f,'description'),affected_count:Number(formVal(f,'affected_count')||0)};if(!p.location_id){toast('Location required','Select the incident location.','danger');return}try{const r=await api('/api/incidents',{method:'POST',body:JSON.stringify(p)});closeModal();state.view='emergency';$$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view==='emergency'));toast('Emergency activated',r.code,'danger');renderEmergency()}catch(err){toast('Incident creation failed',err.message,'danger')}}; }
   function openIncidentNote(i){ modal('Add incident timeline note',i.code,`<form id="eventForm"><div class="field"><label>Event type</label><input name="event_type" value="Update"></div><div class="field"><label>Operational note</label><textarea name="note" required placeholder="Response team reached staging point…"></textarea></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Add note</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#eventForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api(`/api/incidents/${i.id}/events`,{method:'POST',body:JSON.stringify({event_type:formVal(f,'event_type'),note:formVal(f,'note')})});closeModal();toast('Timeline updated');renderEmergency()}catch(err){toast('Update failed',err.message,'danger')}}; }
 
+  async function renderEnvironment(force=false){
+    const exp=state.expeditions.find(e=>e.id===state.expeditionId);
+    setHeader('Environment & Science',`${exp?.region||'Polar region'} · live and near-real-time environmental intelligence.`);
+    $('#view').innerHTML='<div class="panel"><div class="empty" style="min-height:300px"><div><strong>Loading polar environment…</strong>Checking weather, sea ice, space weather and seismic feeds.</div></div></div>';
+    let r;
+    try{
+      r=await api(`/api/environment/overview?expedition_id=${state.expeditionId}${force?'&force=true':''}`);
+    }catch(err){
+      $('#view').innerHTML=`<div class="panel"><div class="empty" style="min-height:300px"><div><strong>Environmental feeds unavailable</strong>${esc(err.message)}</div></div></div>`;
+      return;
+    }
+    const d=r.data||{}, w=d.weather, sea=d.sea_ice, space=d.space_weather, quakes=d.earthquakes;
+    const pole=r.pole==='north'?'Arctic / North':'Antarctic / South';
+    const errors=Object.keys(r.errors||{});
+    const base=r.primary_location?.name||'No mapped base';
+    const kp=Number(space?.estimated_kp);
+    const kpKind=Number.isFinite(kp)&&kp>=5?'danger':Number.isFinite(kp)&&kp>=4?'warn':'good';
+    const quakeCount=quakes?.count??0;
+    $('#view').innerHTML=`
+      <div class="science-hero ${r.pole}">
+        <div><span class="eyebrow">POLAR ENVIRONMENT / ${esc(pole.toUpperCase())}</span><h2>Operational environment + science picture</h2><p>Public environmental feeds are separated from private personnel and logistics telemetry. Every external product is labelled with its source and update cadence.</p></div>
+        <div class="science-actions"><span class="badge ${errors.length?'warn':'good'}">${errors.length?`${errors.length} feed issue${errors.length===1?'':'s'}`:'Feeds connected'}</span><button class="button secondary" id="refreshEnvironment">↻ Refresh live data</button></div>
+      </div>
+      <div class="environment-stats">
+        <div class="env-stat ${w?'good':'warn'}"><span>Weather · ${esc(base)}</span><strong>${w?.temperature_c==null?'—':`${n(w.temperature_c,1)} °C`}</strong><small>${w?`${n(w.wind_speed_kph,1)} km/h wind · gusts ${n(w.wind_gusts_kph,1)} km/h`:'Feed unavailable'}</small></div>
+        <div class="env-stat info"><span>Sea ice product</span><strong>${sea?.date||'—'}</strong><small>${sea?.freshness||'NOAA/NSIDC daily product'}</small></div>
+        <div class="env-stat ${kpKind}"><span>Geomagnetic Kp</span><strong>${Number.isFinite(kp)?n(kp,2):'—'}</strong><small>${space?`${esc(space.communications_risk)} level · ${fmtDate(space.time_tag)}`:'NOAA SWPC unavailable'}</small></div>
+        <div class="env-stat ${quakeCount?'warn':'good'}"><span>Polar earthquakes</span><strong>${quakeCount}</strong><small>M4+ · last ${quakes?.period_days||30} days</small></div>
+      </div>
+      <div class="science-grid">
+        <section class="panel science-visual">
+          <div class="panel-head"><div><h2>Daily sea-ice concentration</h2><p>NOAA/NSIDC Sea Ice Index v4 · ${esc(pole)}</p></div>${sea?.date?`<span class="badge info">${esc(sea.date)}</span>`:''}</div>
+          ${sea?.concentration_image?`<img class="science-feed-image" src="${esc(sea.concentration_image)}" alt="Latest ${esc(pole)} sea ice concentration from NOAA NSIDC" loading="lazy">`:`<div class="empty" style="min-height:260px"><div><strong>Sea-ice image unavailable</strong>${esc(r.errors?.sea_ice||'')}</div></div>`}
+          <div class="feed-caption"><span>Daily satellite-derived concentration; not a certified navigation chart.</span>${sea?.source_url?`<a href="${esc(sea.source_url)}" target="_blank" rel="noopener">Open NSIDC source ↗</a>`:''}</div>
+        </section>
+        <section class="panel science-visual">
+          <div class="panel-head"><div><h2>Latest auroral forecast</h2><p>NOAA SWPC OVATION · high-latitude space-weather context</p></div>${space?.aurora?.time_tag?`<span class="badge ${kpKind}">${fmtDate(space.aurora.time_tag)}</span>`:''}</div>
+          ${space?.aurora?.image_url?`<img class="science-feed-image" src="${esc(space.aurora.image_url)}" alt="Latest ${esc(pole)} NOAA SWPC auroral forecast" loading="lazy">`:`<div class="empty" style="min-height:260px"><div><strong>Aurora image unavailable</strong>${esc(r.errors?.space_weather||'')}</div></div>`}
+          <div class="feed-caption"><span>Kp/OVATION are indicators; radio impact depends on frequency, equipment and local conditions.</span>${space?.source_url?`<a href="${esc(space.source_url)}" target="_blank" rel="noopener">Open NOAA SWPC ↗</a>`:''}</div>
+        </section>
+      </div>
+      <div class="science-grid lower">
+        <section class="panel">
+          <div class="panel-head"><div><h2>Recent polar earthquakes</h2><p>USGS M4+ events · last ${quakes?.period_days||30} days · ${esc(pole)}</p></div><span class="badge info">${quakeCount} events</span></div>
+          ${quakes?.events?.length?`<div class="table-wrap compact-table"><table><thead><tr><th>UTC</th><th>Magnitude</th><th>Location</th><th>Depth</th></tr></thead><tbody>${quakes.events.slice(0,10).map(q=>`<tr><td>${fmtDate(q.time)}</td><td><strong>M${n(q.magnitude,1)}</strong></td><td>${q.detail_url?`<a href="${esc(q.detail_url)}" target="_blank" rel="noopener">${esc(q.place||'Polar region')}</a>`:esc(q.place||'Polar region')}</td><td>${n(q.depth_km,1)} km</td></tr>`).join('')}</tbody></table></div>`:`<div class="empty" style="min-height:150px"><div><strong>No M4+ events returned</strong>${esc(r.errors?.earthquakes||'No qualifying events in this period.')}</div></div>`}
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><h2>Current conditions</h2><p>Model current conditions at the primary mapped mission location.</p></div></div>
+          ${w?`<div class="weather-grid environment-weather">
+            <div><span>Temperature</span><strong>${w.temperature_c==null?'—':`${n(w.temperature_c,1)} °C`}</strong></div>
+            <div><span>Feels like</span><strong>${w.apparent_temperature_c==null?'—':`${n(w.apparent_temperature_c,1)} °C`}</strong></div>
+            <div><span>Humidity</span><strong>${w.relative_humidity==null?'—':`${n(w.relative_humidity)}%`}</strong></div>
+            <div><span>Wind</span><strong>${w.wind_speed_kph==null?'—':`${n(w.wind_speed_kph,1)} km/h`}</strong></div>
+            <div><span>Gusts</span><strong>${w.wind_gusts_kph==null?'—':`${n(w.wind_gusts_kph,1)} km/h`}</strong></div>
+            <div><span>Pressure</span><strong>${w.surface_pressure_hpa==null?'—':`${n(w.surface_pressure_hpa,1)} hPa`}</strong></div>
+          </div><div class="feed-caption"><span>${esc(w.source)} · ${fmtDate(w.observed_at)} UTC</span><a href="${esc(w.source_url)}" target="_blank" rel="noopener">Weather source ↗</a></div>`:`<div class="empty" style="min-height:180px"><div><strong>No weather coordinates available</strong>Add a mapped station/base/camp to this expedition.</div></div>`}
+        </section>
+      </div>
+      <section class="panel" style="margin-top:10px">
+        <div class="panel-head"><div><h2>Authoritative polar data & mapping tools</h2><p>Selected operational and scientific resources for commanders, logistics teams and researchers.</p></div></div>
+        <div class="resource-grid">${(r.resources||[]).map(x=>`<a class="resource-card" href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.category)}</span><strong>${esc(x.name)}</strong><p>${esc(x.detail)}</p><small>${esc(x.update)}</small></a>`).join('')}</div>
+      </section>
+      <div class="environment-disclaimer"><strong>Operational boundary:</strong> these public feeds support situational awareness and science planning. They do not replace national programme instructions, certified navigation products, local observations, aviation briefings, medical protocols or authorized worker/vehicle telemetry.</div>
+    `;
+    const refresh=$('#refreshEnvironment');
+    if(refresh)refresh.onclick=()=>renderEnvironment(true);
+  }
+
   async function renderNetwork(){
     setHeader('Antarctic Network','Official public facilities reference data, live environmental conditions and mission-base import.');
     const [sources,data]=await Promise.all([
@@ -635,7 +704,7 @@
     $('#locForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={expedition_id:state.expeditionId,name:formVal(f,'name'),type:formVal(f,'type'),latitude:numOrNull(formVal(f,'latitude')),longitude:numOrNull(formVal(f,'longitude'))};try{if(loc)await api(`/api/locations/${loc.id}`,{method:'PATCH',body:JSON.stringify(p)});else await api('/api/locations',{method:'POST',body:JSON.stringify(p)});closeModal();toast(loc?'Location updated':'Location added',p.name);renderSettings()}catch(err){toast('Location save failed',err.message,'danger')}};
   }
   function openPasswordChange(){ modal('Change password','Use at least eight characters.',`<form id="pwForm"><div class="field"><label>Current password</label><input name="current_password" type="password" required></div><div class="field"><label>New password</label><input name="new_password" type="password" minlength="8" required></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Update password</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#pwForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/me/password',{method:'POST',body:JSON.stringify({current_password:formVal(f,'current_password'),new_password:formVal(f,'new_password')})});closeModal();toast('Password changed')}catch(err){toast('Password change failed',err.message,'danger')}}; }
-  function openUserCreate(){ modal('Create user','Assign the minimum role needed for expedition work.',`<form id="userForm"><div class="form-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Role</label><select name="role"><option value="field">Field</option><option value="logistics">Logistics</option><option value="commander">Commander</option></select></div><div class="field"><label>Temporary password</label><input name="password" type="password" minlength="8" required></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Create user</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#userForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/users',{method:'POST',body:JSON.stringify({name:formVal(f,'name'),email:formVal(f,'email'),role:formVal(f,'role'),password:formVal(f,'password')})});closeModal();toast('User created');renderSettings()}catch(err){toast('User creation failed',err.message,'danger')}}; }
+  function openUserCreate(){ modal('Create user','Assign the minimum role needed for expedition work.',`<form id="userForm"><div class="form-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Role</label><select name="role"><option value="field">Field</option><option value="scientist">Scientist</option><option value="logistics">Logistics</option><option value="commander">Commander</option></select></div><div class="field"><label>Temporary password</label><input name="password" type="password" minlength="8" required></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Create user</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#userForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/users',{method:'POST',body:JSON.stringify({name:formVal(f,'name'),email:formVal(f,'email'),role:formVal(f,'role'),password:formVal(f,'password')})});closeModal();toast('User created');renderSettings()}catch(err){toast('User creation failed',err.message,'danger')}}; }
   async function downloadBackup(){ try{const res=await fetch('/api/backup',{headers:{Authorization:`Bearer ${state.token}`}});if(!res.ok)throw new Error('Backup request failed');const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`polarops-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);toast('Backup downloaded')}catch(err){toast('Backup failed',err.message,'danger')} }
 
   async function init(){

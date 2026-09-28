@@ -786,7 +786,7 @@ async def list_users(request: Request, user=Depends(require("commander"))):
 
 @app.post("/api/users")
 async def add_user(data: UserCreate, request: Request, user=Depends(require("commander"))):
-    if data.role not in ("commander", "logistics", "field"):
+    if data.role not in ("commander", "logistics", "field", "scientist"):
         raise HTTPException(400, "Invalid role")
     env = request.scope["env"]
     try:
