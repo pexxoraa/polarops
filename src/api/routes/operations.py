@@ -371,7 +371,7 @@ async def update_alert(item_id: int, request: Request, payload: dict, user=Depen
 @router.get("/api/ops/science")
 async def list_science(request: Request, expedition_id: int, user=Depends(require_permission("operations.read"))):
     env, _ = await access(request, user, expedition_id)
-    return {"items": await q_all(env, "SELECT s.*,p.name researcher_name FROM science_records s LEFT JOIN personnel p ON p.id=s.researcher_id WHERE s.expedition_id=? ORDER BY COALESCE(collected_at,created_at) DESC", expedition_id)}
+    return {"items": await q_all(env, "SELECT s.*,p.name researcher_name FROM science_records s LEFT JOIN personnel p ON p.id=s.researcher_id WHERE s.expedition_id=? ORDER BY COALESCE(s.collected_at,s.created_at) DESC", expedition_id)}
 
 
 @router.post("/api/ops/science")
