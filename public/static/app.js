@@ -16,8 +16,8 @@
   };
 
   const navItems=[
-    ['overview','⌂','Overview'],['personnel','◎','Personnel'],['cargo','▣','Cargo'],['inventory','▤','Inventory'],
-    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Emergency'],['network','⌖','Antarctic Network'],['activity','≡','Activity'],['settings','⚙','Settings']
+    ['overview','⌂','Dashboard'],['personnel','◎','Personnel'],['cargo','▣','Cargo'],['inventory','▤','Inventory'],
+    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Incidents'],['network','⌖','Antarctic Network'],['activity','≡','Activity'],['settings','⚙','Settings']
   ];
 
   function saveQueue(){ localStorage.setItem(queueKey,JSON.stringify(state.pending)); updateSync(); }
@@ -211,23 +211,33 @@
   }
 
   async function renderOverview(){
-    setHeader('Command Overview','Live expedition status, resource posture and operational exceptions.');
     const d=await api(`/api/dashboard?expedition_id=${state.expeditionId}`), s=d.stats;
+    setHeader(`${d.expedition.name} — Command Dashboard`, `${d.expedition.start_date||'—'} – ${d.expedition.end_date||'—'}  |  ${d.expedition.region}`);
     const riskScore=Math.min(100,d.risks.reduce((a,r)=>a+(r.severity==='high'?28:14),0));
     $('#view').innerHTML=`
       <div class="stats">
-        ${stat('Personnel',`${s.personnel_total-s.personnel_overdue} / ${s.personnel_total}`,s.personnel_overdue?`${s.personnel_overdue} check-in overdue`:'All accounted for','◎',s.personnel_overdue?'danger':'good')}
-        ${stat('Cargo',`${s.cargo_delivered} / ${s.cargo_total}`,`Delivered across mission`,'▣','info')}
-        ${stat('Fuel',`${s.fuel_avg}%`,`Average vehicle reserve`,'◫',s.fuel_avg<35?'danger':'warn')}
+        ${stat('Personnel',`${s.personnel_total-s.personnel_overdue} / ${s.personnel_total}`,s.personnel_overdue?`${s.personnel_overdue} check-in overdue`:'Safe / accounted for','◎',s.personnel_overdue?'danger':'good')}
+        ${stat('Cargo',`${s.cargo_delivered} / ${s.cargo_total}`,'Delivered','▣','info')}
+        ${stat('Fuel',`${s.fuel_avg}%`,'Average reserve','◫',s.fuel_avg<35?'danger':'warn')}
         ${stat('Inventory alerts',s.inventory_alerts,s.inventory_alerts?'Items below minimum':'No low stock','▤',s.inventory_alerts?'danger':'good')}
-        ${stat('Vehicles',`${s.vehicles_operational} / ${s.vehicles_total}`,`Operational`,'▱',s.vehicles_operational<s.vehicles_total?'warn':'good')}
+        ${stat('Vehicles',`${s.vehicles_operational} / ${s.vehicles_total}`,'Operational','▱',s.vehicles_operational<s.vehicles_total?'warn':'good')}
         ${stat('Active incidents',s.active_incidents,s.active_incidents?'Response required':'No active incidents','△',s.active_incidents?'danger':'good')}
       </div>
-      <div class="grid-2"><div class="panel"><div class="panel-head"><div><h2>Operational Map</h2><p>Locations and response assets for ${esc(d.expedition.name)}.</p></div><span class="badge info"><i class="dot"></i>LIVE DATA</span></div>${renderMap(d.locations,d.vehicles,d.personnel)}</div>
-        <div class="panel"><div class="panel-head"><div><h2>Operational Risk</h2><p>Deterministic exception analysis from mission state.</p></div></div><div class="risk-summary"><div class="risk-ring">${riskScore}</div><div><strong>${riskScore>55?'High attention':riskScore>20?'Requires attention':'Controlled'}</strong><p>Risk score is derived from overdue check-ins, safety-stock breaches and low vehicle fuel.</p></div></div><div class="risk-list">${d.risks.length?d.risks.map(r=>`<div class="risk-item ${r.severity}"><div class="risk-icon">!</div><div><strong>${esc(r.title)}</strong><span>${esc(r.detail)}</span></div></div>`).join(''):'<div class="empty" style="min-height:150px"><div><strong>No current exceptions</strong>Mission thresholds are within configured limits.</div></div>'}</div></div>
-      </div>
-      <div class="grid-equal"><div class="panel"><div class="panel-head"><div><h2>Recent Activity</h2><p>Cross-module operations timeline.</p></div><button class="button ghost small" data-go="activity">View all</button></div><div class="activity-list">${d.activity.slice(0,7).map(a=>activityRow(a)).join('')}</div></div>
-        <div class="panel"><div class="panel-head"><div><h2>Mission Snapshot</h2><p>Assets, timing and command posture.</p></div></div><div class="info-list"><div class="info-row"><span>Region</span><strong>${esc(d.expedition.region)}</strong></div><div class="info-row"><span>Mission status</span><strong>${esc(d.expedition.status)}</strong></div><div class="info-row"><span>Mission window</span><strong>${esc(d.expedition.start_date||'—')} → ${esc(d.expedition.end_date||'—')}</strong></div><div class="info-row"><span>Tracked assets</span><strong>${s.assets_total}</strong></div><div class="info-row"><span>Locations</span><strong>${d.locations.length}</strong></div><div class="info-row"><span>Live GPS feeds</span><strong>${s.live_personnel+s.live_vehicles} trackers</strong></div><div class="info-row"><span>Data mode</span><strong>Durable Object live + offline queue</strong></div></div></div>
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-head"><div><h2>Expedition Map</h2><p>Live mission locations, personnel and response vehicles.</p></div><span class="badge info"><i class="dot"></i>LIVE</span></div>
+          ${renderMap(d.locations,d.vehicles,d.personnel)}
+        </div>
+        <div class="dashboard-side">
+          <div class="panel">
+            <div class="panel-head"><div><h2>Recent Activity</h2><p>Latest cross-module events.</p></div><button class="button ghost small" data-go="activity">View all</button></div>
+            <div class="activity-list">${d.activity.slice(0,6).map(a=>activityRow(a)).join('')||'<div class="empty" style="min-height:130px"><div><strong>No recent activity</strong>Mission events will appear here.</div></div>'}</div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div><h2>Top Operational Risks</h2><p>Exceptions requiring attention.</p></div></div>
+            <div class="risk-list">${d.risks.length?d.risks.slice(0,5).map(r=>`<div class="risk-item ${r.severity}"><div class="risk-icon">!</div><div><strong>${esc(r.title)}</strong><span>${esc(r.detail)}</span></div></div>`).join(''):`<div class="risk-summary"><div class="risk-ring">${riskScore}</div><div><strong>Controlled</strong><p>No current threshold exceptions.</p></div></div>`}</div>
+          </div>
+        </div>
       </div>`;
     $$('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
   }
