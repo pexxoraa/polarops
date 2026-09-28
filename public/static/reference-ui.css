@@ -175,3 +175,6 @@ body[data-pole="north"] .polar-switch button[data-pole="north"].active{backgroun
 .current-additions-panel .table-wrap{max-height:520px;overflow:auto}
 @media(max-width:980px){.verification-summary{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:620px){.verification-summary{grid-template-columns:1fr}}
+
+/* Dashboard public research-base overlays */
+.public-facility-popup .popup-kicker{display:block;margin-bottom:4px;font-size:7px;letter-spacing:.65px;font-weight:850;color:#6b46ce}.public-facility-popup strong{display:block;font-size:11px;color:#17364e;margin-bottom:2px}.live-mission-map .leaflet-control-layers-overlays label{font-weight:650}.live-mission-map .leaflet-control-layers-overlays label:nth-child(2){color:#6b46ce}.live-mission-map .leaflet-control-layers-overlays label:nth-child(3){color:#0f7e9f}

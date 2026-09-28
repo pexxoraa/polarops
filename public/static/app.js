@@ -319,7 +319,18 @@
   }
 
   async function renderOverview(){
-    const d=await api(`/api/dashboard?expedition_id=${state.expeditionId}`), s=d.stats;
+    const selectedExp=state.expeditions.find(e=>e.id===state.expeditionId);
+    const selectedPole=poleForRegion(selectedExp?.region);
+    const [d,facilityResponse]=await Promise.all([
+      api(`/api/dashboard?expedition_id=${state.expeditionId}`),
+      selectedPole==='south'
+        ? api('/api/public/facilities?limit=1000').catch(()=>({items:[]}))
+        : Promise.resolve({items:[]})
+    ]);
+    const s=d.stats;
+    const publicFacilities=(facilityResponse.items||[]).filter(f=>f.geographic_scope==='antarctic_treaty_area');
+    const researchBases=publicFacilities.filter(f=>f.facility_type==='Station');
+    const supportFacilities=publicFacilities.filter(f=>f.facility_type!=='Station');
     setHeader(`${d.expedition.name} — Command Dashboard`, `${d.expedition.start_date||'—'} – ${d.expedition.end_date||'—'}  |  ${d.expedition.region}`);
     const riskScore=Math.min(100,d.risks.reduce((a,r)=>a+(r.severity==='high'?28:14),0));
     const pole=poleForRegion(d.expedition.region), regionName=pole==='north'?'ARCTIC / NORTH POLAR OPERATIONS':'ANTARCTIC / SOUTH POLAR OPERATIONS';
@@ -339,9 +350,9 @@
       </div>
       <div class="grid-2">
         <div class="panel">
-          <div class="panel-head"><div><h2>Expedition Map</h2><p>Live mission locations, personnel and response vehicles.</p></div><span class="badge info"><i class="dot"></i>LIVE</span></div>
+          <div class="panel-head"><div><h2>Expedition Map</h2><p>${pole==='south'?'Live mission operations plus verified COMNAP Antarctic research bases.':'Live mission locations, personnel and response vehicles.'}</p></div><div class="panel-actions"><span class="badge info"><i class="dot"></i>LIVE</span>${pole==='south'?`<span class="badge violet">${researchBases.length} RESEARCH BASES</span>`:''}</div></div>
           <div id="liveMissionMap" class="live-mission-map" role="application" aria-label="Live expedition map"></div>
-          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>Basemaps: Esri Satellite · Esri Topographic</span></div>
+          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>${pole==='south'?`COMNAP Nov 2024 · ${researchBases.length} research bases · ${supportFacilities.length} other Treaty-area facilities`:'Basemaps: Esri Satellite · Esri Topographic'}</span></div>
         </div>
         <div class="dashboard-side">
           <div class="panel">
@@ -355,21 +366,23 @@
         </div>
       </div>`;
     $$('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
-    initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition);
+    initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition,publicFacilities);
   }
 
   function polarMarker(kind,label){
     const glyph=kind==='vehicle'?'▣':kind==='person'?'●':kind==='camp'?'▲':'⌂';
     return L.divIcon({className:'polar-leaflet-icon',html:`<span class="pm ${kind}">${glyph}</span><em>${esc(label)}</em>`,iconSize:[120,34],iconAnchor:[17,17]});
   }
-  function initLiveMissionMap(locations,vehicles,personnel,expedition){
+  function initLiveMissionMap(locations,vehicles,personnel,expedition,publicFacilities=[]){
     const el=$('#liveMissionMap');
     if(!el||!window.L)return;
     destroyLiveMap();
     const fixed=locations.filter(x=>Number.isFinite(Number(x.latitude))&&Number.isFinite(Number(x.longitude)));
     const vehiclePoints=vehicles.filter(v=>Number.isFinite(Number(v.latitude))&&Number.isFinite(Number(v.longitude)));
     const peoplePoints=personnel.filter(p=>Number.isFinite(Number(p.live_latitude))&&Number.isFinite(Number(p.live_longitude)));
-    const all=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
+    const researchBases=publicFacilities.filter(f=>f.facility_type==='Station'&&Number.isFinite(Number(f.latitude))&&Number.isFinite(Number(f.longitude)));
+    const supportFacilities=publicFacilities.filter(f=>f.facility_type!=='Station'&&Number.isFinite(Number(f.latitude))&&Number.isFinite(Number(f.longitude)));
+    const missionCoords=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
     const pole=poleForRegion(expedition?.region);
     const fallback=pole==='north'?[78.7,15]:[-75,40];
     state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView(fallback,pole==='north'?4:3);
@@ -379,29 +392,57 @@
     const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{
       maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
     });
+    const missionLayer=L.layerGroup().addTo(state.liveMap);
+    const researchLayer=L.layerGroup();
+    const supportLayer=L.layerGroup();
     satellite.addTo(state.liveMap);
-    L.control.layers({'Satellite':satellite,'Topographic':topo},null,{position:'topright',collapsed:false}).addTo(state.liveMap);
+    if(pole==='south'&&researchBases.length)researchLayer.addTo(state.liveMap);
+    const overlays={'Mission operations':missionLayer};
+    if(pole==='south'&&researchBases.length)overlays[`Research bases (${researchBases.length})`]=researchLayer;
+    if(pole==='south'&&supportFacilities.length)overlays[`Other facilities (${supportFacilities.length})`]=supportLayer;
+    L.control.layers({'Satellite':satellite,'Topographic':topo},overlays,{position:'topright',collapsed:false}).addTo(state.liveMap);
     const base=fixed.find(x=>/base|station|hub/i.test(`${x.name} ${x.type}`))||fixed[0];
     if(base){
-      fixed.filter(x=>x.id!==base.id).forEach(x=>L.polyline([[+base.latitude,+base.longitude],[+x.latitude,+x.longitude]],{color:'#0b78e3',weight:2,dashArray:'7 7',opacity:.65}).addTo(state.liveMap));
+      fixed.filter(x=>x.id!==base.id).forEach(x=>L.polyline([[+base.latitude,+base.longitude],[+x.latitude,+x.longitude]],{color:'#0b78e3',weight:2,dashArray:'7 7',opacity:.65}).addTo(missionLayer));
     }
     fixed.forEach(x=>{
       const kind=/camp/i.test(x.type)?'camp':'location';
-      L.marker([+x.latitude,+x.longitude],{icon:polarMarker(kind,x.name)}).addTo(state.liveMap)
+      L.marker([+x.latitude,+x.longitude],{icon:polarMarker(kind,x.name)}).addTo(missionLayer)
         .bindPopup(`<strong>${esc(x.name)}</strong><br>${esc(x.type)}<br><small>${n(x.latitude,5)}, ${n(x.longitude,5)}</small>`);
     });
     vehiclePoints.forEach(v=>{
-      const marker=L.marker([+v.latitude,+v.longitude],{icon:polarMarker('vehicle',`${v.code} ${v.telemetry_recorded_at?'LIVE':''}`)}).addTo(state.liveMap)
+      const marker=L.marker([+v.latitude,+v.longitude],{icon:polarMarker('vehicle',`${v.code} ${v.telemetry_recorded_at?'LIVE':''}`)}).addTo(missionLayer)
         .bindPopup(`<strong>${esc(v.code)} · ${esc(v.name)}</strong><br>${esc(v.status)} · ${n(v.fuel_percent)}% fuel${v.telemetry_recorded_at?`<br><b>LIVE GPS</b> · ${ago(v.telemetry_recorded_at)}`:''}`);
       state.liveMarkers.vehicle.set(Number(v.id),marker);
     });
     peoplePoints.forEach(p=>{
-      const marker=L.marker([+p.live_latitude,+p.live_longitude],{icon:polarMarker('person',`${p.name} LIVE`)}).addTo(state.liveMap)
+      const marker=L.marker([+p.live_latitude,+p.live_longitude],{icon:polarMarker('person',`${p.name} LIVE`)}).addTo(missionLayer)
         .bindPopup(`<strong>${esc(p.name)}</strong><br>${esc(p.role)}<br><b>LIVE GPS</b> · ${ago(p.telemetry_recorded_at)}`);
       state.liveMarkers.personnel.set(Number(p.id),marker);
     });
-    if(all.length===1)state.liveMap.setView(all[0],7);
-    else if(all.length>1)state.liveMap.fitBounds(L.latLngBounds(all).pad(.18),{maxZoom:7,animate:false});
+    if(pole==='south'){
+      researchBases.forEach(f=>{
+        const open=String(f.status||'').toLowerCase()==='open';
+        L.circleMarker([+f.latitude,+f.longitude],{
+          radius:5,weight:1.5,color:open?'#6b46ce':'#d48a16',
+          fillColor:open?'#8a63df':'#f0a52a',fillOpacity:.88
+        }).addTo(researchLayer)
+          .bindTooltip(esc(f.name),{direction:'top',sticky:true,opacity:.95})
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">COMNAP RESEARCH BASE</span><strong>${esc(f.name)}</strong><br>${esc(f.country||f.programme||'Antarctic programme')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small></div>`);
+      });
+      supportFacilities.forEach(f=>{
+        L.circleMarker([+f.latitude,+f.longitude],{
+          radius:4,weight:1,color:'#0f7e9f',fillColor:'#25a9c7',fillOpacity:.72
+        }).addTo(supportLayer)
+          .bindTooltip(esc(f.name),{direction:'top',sticky:true,opacity:.95})
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">COMNAP ${esc(String(f.facility_type||'FACILITY').toUpperCase())}</span><strong>${esc(f.name)}</strong><br>${esc(f.country||f.programme||'Antarctic programme')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small></div>`);
+      });
+    }
+    const overviewCoords=pole==='south'&&researchBases.length
+      ? [...missionCoords,...researchBases.map(f=>[+f.latitude,+f.longitude])]
+      : missionCoords;
+    if(overviewCoords.length===1)state.liveMap.setView(overviewCoords[0],7);
+    else if(overviewCoords.length>1)state.liveMap.fitBounds(L.latLngBounds(overviewCoords).pad(.08),{maxZoom:pole==='south'?4:7,animate:false});
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
   }
 
