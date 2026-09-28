@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf_fetch
-from js import Buffer, Object, TextEncoder, Uint8Array, WebSocketPair, crypto
+from js import Object, TextEncoder, Uint8Array, WebSocketPair, crypto
 from pyodide.ffi import to_js as _to_js
 
 APP_VERSION = "2.0.0-cloudflare"
@@ -96,10 +96,10 @@ def _js_obj(value):
     return _to_js(value, dict_converter=Object.fromEntries)
 
 
-async def _pbkdf2_bits(password: str, salt_js, rounds: int):
-    # Do not keep JavaScript object instances in module-level globals.
-    # Python Workers snapshot top-level state during deployment, and objects
-    # such as TextEncoder instances are not serializable.
+async def _pbkdf2_bytes(password: str, salt: bytes, rounds: int) -> bytes:
+    # Use Workers Web Crypto for PBKDF2, but keep encoding/decoding in Python.
+    # Pyodide converts Python bytes to a JS TypedArray and JS TypedArrays back
+    # to Python memoryviews, avoiding Node Buffer interop differences.
     encoder = TextEncoder.new()
     key = await crypto.subtle.importKey(
         "raw",
@@ -108,7 +108,8 @@ async def _pbkdf2_bits(password: str, salt_js, rounds: int):
         False,
         ["deriveBits"],
     )
-    return await crypto.subtle.deriveBits(
+    salt_js = _to_js(salt)
+    bits = await crypto.subtle.deriveBits(
         _js_obj({
             "name": "PBKDF2",
             "salt": salt_js,
@@ -118,18 +119,19 @@ async def _pbkdf2_bits(password: str, salt_js, rounds: int):
         key,
         256,
     )
+    return bytes(Uint8Array.new(bits).to_py())
 
 
 async def hash_password(password: str) -> str:
-    # Python Workers run on Pyodide, where hashlib.pbkdf2_hmac depends on
-    # OpenSSL functionality that is not available. Use Workers Web Crypto
-    # instead; PBKDF2 is implemented natively by the Workers runtime.
-    salt = crypto.getRandomValues(Uint8Array.new(16))
-    digest = await _pbkdf2_bits(password, salt, 180_000)
-    buffer_from = getattr(Buffer, "from")
-    salt_b64 = str(buffer_from(salt).toString("base64")).replace("+", "-").replace("/", "_")
-    digest_b64 = str(buffer_from(digest).toString("base64")).replace("+", "-").replace("/", "_")
-    return "pbkdf2_sha256$180000$" + salt_b64 + "$" + digest_b64
+    salt_js = crypto.getRandomValues(Uint8Array.new(16))
+    salt = bytes(salt_js.to_py())
+    digest = await _pbkdf2_bytes(password, salt, 180_000)
+    return (
+        "pbkdf2_sha256$180000$"
+        + base64.urlsafe_b64encode(salt).decode()
+        + "$"
+        + base64.urlsafe_b64encode(digest).decode()
+    )
 
 
 async def verify_password(password: str, encoded: str) -> bool:
@@ -137,21 +139,13 @@ async def verify_password(password: str, encoded: str) -> bool:
         algo, rounds, salt_b64, digest_b64 = encoded.split("$", 3)
         if algo != "pbkdf2_sha256":
             return False
-        buffer_from = getattr(Buffer, "from")
-        # Seed hashes use URL-safe base64. Node/Workers Buffer accepts normal
-        # base64 most reliably, so normalize the alphabet before decoding.
-        normalized_salt = salt_b64.replace("-", "+").replace("_", "/")
-        salt = buffer_from(normalized_salt, "base64")
-        actual = await _pbkdf2_bits(password, salt, int(rounds))
-
-        # SubtleCrypto does not provide timingSafeEqual. Convert the derived
-        # ArrayBuffer to base64url text and compare with Python's constant-time
-        # hmac.compare_digest instead.
-        actual_b64 = str(buffer_from(actual).toString("base64"))
-        actual_b64url = actual_b64.replace("+", "-").replace("/", "_").rstrip("=")
-        expected_b64url = digest_b64.rstrip("=")
-        return hmac.compare_digest(actual_b64url, expected_b64url)
-    except Exception:
+        salt = base64.urlsafe_b64decode(salt_b64.encode())
+        expected = base64.urlsafe_b64decode(digest_b64.encode())
+        actual = await _pbkdf2_bytes(password, salt, int(rounds))
+        return hmac.compare_digest(actual, expected)
+    except Exception as exc:
+        # Safe diagnostic: do not log the password, salt, digest or token.
+        print(f"AUTH_VERIFY_ERROR {type(exc).__name__}: {exc}")
         return False
 
 
