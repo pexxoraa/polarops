@@ -183,7 +183,10 @@
   }
   function applyPolarTheme(){ document.body.dataset.pole=currentPole(); }
   function destroyLiveMap(){
-    if(state.liveMap){ try{state.liveMap.remove()}catch{} state.liveMap=null; }
+    if(state.liveMap){
+      const map=state.liveMap; state.liveMap=null;
+      try{ map.stop(); map.off(); map.remove(); }catch{}
+    }
     state.liveMarkers={personnel:new Map(),vehicle:new Map()};
   }
   async function switchExpedition(id){
@@ -342,7 +345,7 @@
     const all=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
     const pole=poleForRegion(expedition?.region);
     const fallback=pole==='north'?[78.7,15]:[-75,40];
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18}).setView(fallback,pole==='north'?4:3);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView(fallback,pole==='north'?4:3);
     const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
       maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
     });
@@ -371,7 +374,7 @@
       state.liveMarkers.personnel.set(Number(p.id),marker);
     });
     if(all.length===1)state.liveMap.setView(all[0],7);
-    else if(all.length>1)state.liveMap.fitBounds(L.latLngBounds(all).pad(.18),{maxZoom:7});
+    else if(all.length>1)state.liveMap.fitBounds(L.latLngBounds(all).pad(.18),{maxZoom:7,animate:false});
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
   }
 
@@ -626,13 +629,13 @@
     if(!el||!window.L)return;
     destroyLiveMap();
     const points=locs.filter(l=>Number.isFinite(+l.latitude)&&Number.isFinite(+l.longitude)&&+l.latitude>=50);
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false}).setView([74,15],3);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([74,15],3);
     const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
     const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
     topo.addTo(state.liveMap);
     L.control.layers({'Topographic':topo,'Satellite':satellite},null,{position:'topright',collapsed:true}).addTo(state.liveMap);
     points.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(state.liveMap).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
-    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(l=>[+l.latitude,+l.longitude])).pad(.15),{maxZoom:7});
+    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(l=>[+l.latitude,+l.longitude])).pad(.15),{maxZoom:7,animate:false});
     else if(points.length===1)state.liveMap.setView([+points[0].latitude,+points[0].longitude],6);
     setTimeout(()=>state.liveMap?.invalidateSize(),60);
   }
@@ -688,7 +691,7 @@
     if(!el||!window.L)return;
     destroyLiveMap();
     const points=facilities.filter(f=>Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude<=-50);
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false}).setView([-74,20],2);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([-74,20],2);
     const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
     const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
     topo.addTo(state.liveMap);
@@ -698,7 +701,7 @@
       L.circleMarker([+f.latitude,+f.longitude],{radius:5,weight:1.5,color:open?'#0877d4':'#d48a16',fillColor:open?'#118bea':'#f2a52a',fillOpacity:.86}).addTo(state.liveMap)
         .bindPopup(`<strong>${esc(f.name)}</strong><br>${esc(f.country||'Antarctic programme')} · ${esc(f.facility_type||'Facility')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small>`);
     });
-    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(f=>[+f.latitude,+f.longitude])).pad(.04),{maxZoom:4});
+    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(f=>[+f.latitude,+f.longitude])).pad(.04),{maxZoom:4,animate:false});
     setTimeout(()=>state.liveMap?.invalidateSize(),60);
   }
 
