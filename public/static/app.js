@@ -203,7 +203,7 @@
   function demoAccount(label,email,pw){ return `<div class="demo-account" data-email="${esc(email)}" data-password="${esc(pw)}"><div><strong>${esc(label)}</strong><span>${esc(email)}</span></div><button type="button">Use account</button></div>`; }
   async function doLogin(email,password){
     const btn=$('#loginForm button[type=submit]'); if(btn){btn.disabled=true;btn.textContent='Signing in…'}
-    try{ const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password})}); state.token=r.token;state.user=r.user;localStorage.setItem(tokenKey,state.token);await bootAuthed(); toast('Signed in',`Role: ${state.user.role}`); }
+    try{ const r=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password})}); if(!r?.token||!r?.user)throw new Error('Invalid login response'); const signedInRole=r.user.role||'user'; state.token=r.token;state.user=r.user;localStorage.setItem(tokenKey,state.token);await bootAuthed(); if(state.user)toast('Signed in',`Role: ${signedInRole}`); }
     catch(e){toast('Sign-in failed',e.message,'danger'); if(btn){btn.disabled=false;btn.textContent='Sign in'}}
   }
   function logout(show=true){ stopPersonnelGps(false);stopVehicleSimulation(false);disconnectRealtime();clearInterval(state.fallbackTimer);localStorage.removeItem(tokenKey);state.token='';state.user=null;state.expeditions=[];state.expeditionId=null; if(show)toast('Signed out');renderLogin(); }
@@ -232,8 +232,8 @@
         <div class="topbar-actions"><span class="realtime-pill connecting" id="realtimePill"><i></i><span id="realtimeLabel">CONNECTING</span></span><select class="expedition-select" id="expeditionSelect">${state.expeditions.map(e=>`<option value="${e.id}" ${e.id===state.expeditionId?'selected':''}>${esc(e.name)}</option>`).join('')}</select><button class="sos-btn" id="globalSOS">⚠ TRIGGER SOS</button></div>
       </header><section id="view"></section></main></div>`;
     applyPolarTheme();
-    $('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
-    $('[data-pole]').forEach(b=>b.addEventListener('click',()=>switchPole(b.dataset.pole)));
+    $$('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
+    $$('[data-pole]').forEach(b=>b.addEventListener('click',()=>switchPole(b.dataset.pole)));
     $('.logout-btn').addEventListener('click',()=>logout());
     $('#expeditionSelect').addEventListener('change',e=>switchExpedition(Number(e.target.value)));
     $('#globalSOS').addEventListener('click',()=>openIncidentCreate()); updateSync();updateRealtimeIndicator();
@@ -285,7 +285,7 @@
           </div>
         </div>
       </div>`;
-    $('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
+    $$('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
     initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition);
   }
 
