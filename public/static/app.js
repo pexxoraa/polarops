@@ -750,7 +750,58 @@
   }
   function invCard(i){ const low=+i.quantity<+i.min_quantity, pct=Math.max(0,Math.min(100,(+i.quantity/Math.max(+i.min_quantity,1))*70));return `<article class="item-card"><div class="item-card-head"><div><span class="code mono">${esc(i.sku)}</span><h3>${esc(i.name)}</h3></div>${badge(low?'LOW':'OK',low?'danger':'good')}</div><p>${esc(i.location_name||'Unassigned location')} · Minimum ${n(i.min_quantity)} ${esc(i.unit)}</p><div class="metric-row"><div class="metric-big">${n(i.quantity)} <small>${esc(i.unit)}</small></div><span class="${low?'danger-text':'good-text'}">${low?'Below safety stock':'Within threshold'}</span></div><div class="progress"><i class="${low?'low':''}" style="width:${pct}%"></i></div><div class="card-actions"><button class="button secondary small" data-adjust-inv="${i.id}">Adjust stock</button>${roleCan('commander','logistics')?`<button class="button ghost small" data-edit-inv="${i.id}">Settings</button>`:''}</div></article>`}
   function openInvCreate(locs){ modal('Add inventory item','Register a resource and its minimum safety stock.',`<form id="invForm"><div class="form-grid"><div class="field"><label>SKU</label><input name="sku" required placeholder="INV-MED-02"></div><div class="field"><label>Item</label><input name="name" required></div><div class="field"><label>Location</label><select name="location_id">${locationOptions(locs)}</select></div><div class="field"><label>Unit</label><input name="unit" value="units"></div><div class="field"><label>Opening quantity</label><input type="number" step="any" name="quantity" value="0"></div><div class="field"><label>Minimum quantity</label><input type="number" step="any" name="min_quantity" value="0"></div><div class="field full"><label>Expiry date</label><input type="date" name="expiry_date"></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Add item</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#invForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={expedition_id:state.expeditionId,sku:formVal(f,'sku').trim().toUpperCase(),name:formVal(f,'name'),location_id:numOrNull(formVal(f,'location_id')),quantity:Number(formVal(f,'quantity')||0),min_quantity:Number(formVal(f,'min_quantity')||0),unit:formVal(f,'unit'),expiry_date:formVal(f,'expiry_date')||null};try{await api('/api/inventory',{method:'POST',body:JSON.stringify(p)});closeModal();toast('Inventory item added',p.name);renderInventory()}catch(err){toast('Save failed',err.message,'danger')}}; }
-  function openInvAdjust(i){ modal('Adjust inventory',`${i.name} · current ${n(i.quantity)} ${i.unit}`,`<form id="adjForm"><div class="form-grid"><div class="field"><label>Adjustment</label><input type="number" step="any" name="delta" required placeholder="Use + for resupply, - for consumption"></div><div class="field"><label>Reason</label><select name="reason"><option>Resupply</option><option>Field consumption</option><option>Transfer correction</option><option>Damaged / lost</option><option>Stock count correction</option></select></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Record adjustment</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#adjForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api(`/api/inventory/${i.id}/adjust`,{method:'POST',body:JSON.stringify({delta:Number(formVal(f,'delta')),reason:formVal(f,'reason')})});closeModal();toast('Inventory adjusted',i.name);renderInventory()}catch(err){toast('Adjustment failed',err.message,'danger')}}; }
+  function openInvAdjust(i){
+    modal('Adjust inventory',`${i.name} · current ${n(i.quantity)} ${i.unit}`,`
+      <form id="adjForm">
+        <div class="form-grid">
+          <div class="field">
+            <label id="inventoryAmountLabel">Quantity received</label>
+            <input type="number" step="any" min="0" name="delta" required placeholder="e.g. 20">
+            <small id="inventoryAmountHelp">Enter the amount received. It will be added to stock.</small>
+          </div>
+          <div class="field">
+            <label>Reason</label>
+            <select name="reason">
+              <option>Resupply</option>
+              <option>Field consumption</option>
+              <option>Damaged / lost</option>
+              <option>Transfer correction</option>
+              <option>Stock count correction</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Record adjustment</button></div>
+      </form>`);
+    $('[data-cancel]').onclick=closeModal;
+    const f=$('#adjForm'),reason=f.elements.reason,amount=f.elements.delta,label=$('#inventoryAmountLabel'),help=$('#inventoryAmountHelp');
+    const updateMeaning=()=>{
+      const value=reason.value;
+      amount.value='';
+      if(value==='Resupply'){
+        label.textContent='Quantity received';help.textContent='Enter the amount received. It will be added to stock.';amount.min='0';amount.placeholder='e.g. 20';
+      }else if(value==='Field consumption'){
+        label.textContent='Quantity consumed';help.textContent='Enter a positive amount. It will be subtracted from stock.';amount.min='0';amount.placeholder='e.g. 5';
+      }else if(value==='Damaged / lost'){
+        label.textContent='Quantity damaged / lost';help.textContent='Enter a positive amount. It will be subtracted from stock.';amount.min='0';amount.placeholder='e.g. 2';
+      }else if(value==='Transfer correction'){
+        label.textContent='Correction (+ / -)';help.textContent='Use a positive number to add or a negative number to subtract.';amount.removeAttribute('min');amount.placeholder='e.g. -3 or 3';
+      }else{
+        label.textContent='Counted quantity';help.textContent=`Enter the actual physical count. Current system quantity is ${n(i.quantity)} ${i.unit}.`;amount.min='0';amount.placeholder=`e.g. ${n(i.quantity)}`;
+      }
+    };
+    reason.onchange=updateMeaning;updateMeaning();
+    f.onsubmit=async e=>{
+      e.preventDefault();
+      const entered=Number(formVal(f,'delta')),selectedReason=formVal(f,'reason');
+      if(!Number.isFinite(entered)){toast('Invalid quantity','Enter a valid number.','danger');return}
+      try{
+        const result=await api(`/api/inventory/${i.id}/adjust`,{method:'POST',body:JSON.stringify({delta:entered,reason:selectedReason})});
+        closeModal();
+        toast('Inventory adjusted',`${i.name}: ${n(result.quantity)} ${i.unit}`);
+        renderInventory();
+      }catch(err){toast('Adjustment failed',err.message,'danger')}
+    };
+  }
   function openInvEdit(i,locs){ modal('Inventory settings',`${i.sku} · ${i.name}`,`<form id="editInvForm"><div class="form-grid"><div class="field"><label>Item name</label><input name="name" value="${esc(i.name)}" required></div><div class="field"><label>Location</label><select name="location_id">${locationOptions(locs,i.location_id)}</select></div><div class="field"><label>Minimum safety stock</label><input type="number" step="any" name="min_quantity" value="${n(i.min_quantity)}"></div><div class="field"><label>Unit</label><input name="unit" value="${esc(i.unit)}"></div><div class="field full"><label>Expiry date</label><input type="date" name="expiry_date" value="${esc(i.expiry_date||'')}"></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Save settings</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#editInvForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api(`/api/inventory/${i.id}`,{method:'PATCH',body:JSON.stringify({name:formVal(f,'name'),location_id:numOrNull(formVal(f,'location_id')),min_quantity:Number(formVal(f,'min_quantity')||0),unit:formVal(f,'unit'),expiry_date:formVal(f,'expiry_date')||null})});closeModal();toast('Inventory settings updated',i.name);renderInventory()}catch(err){toast('Update failed',err.message,'danger')}}; }
 
   async function renderVehicles(){

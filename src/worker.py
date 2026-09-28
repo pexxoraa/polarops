@@ -37,6 +37,7 @@ from realtime.broadcaster import broadcast
 from realtime.expedition_room import ExpeditionRoom
 from repositories.activity import log_activity
 from services.relationship_service import valid_location_ids, valid_personnel_ids
+from services.inventory_service import resolve_inventory_adjustment
 from services.realtime_access_service import realtime_ticket_allows_expedition
 
 
@@ -794,18 +795,26 @@ async def adjust_inventory(item_id: int, data: InventoryAdjust, request: Request
     row = await q_first(env, "SELECT expedition_id,name,quantity FROM inventory_items WHERE id=?", item_id)
     if not row: raise HTTPException(404, "Inventory item not found")
     await ensure_expedition_access(env, user, row["expedition_id"])
-    new_qty = float(row["quantity"] or 0) + data.delta
-    if new_qty < 0: raise HTTPException(400, "Inventory cannot be negative")
+    try:
+        actual_delta, new_qty, reason = resolve_inventory_adjustment(row["quantity"], data.delta, data.reason)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     now = utcnow()
+    if reason == "Stock count correction":
+        message = f"{row['name']} stock count corrected to {new_qty:g} ({actual_delta:+g})"
+    else:
+        message = f"{row['name']} adjusted by {actual_delta:+g}: {reason}"
     await q_write_batch(env, [
         ("UPDATE inventory_items SET quantity=? WHERE id=?", (new_qty, item_id)),
         ("INSERT INTO inventory_events(inventory_id,delta,reason,user_id,created_at) VALUES(?,?,?,?,?)",
-         (item_id, data.delta, data.reason, user["id"], now)),
+         (item_id, actual_delta, reason, user["id"], now)),
         ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
-         (row["expedition_id"], "inventory", f"{row['name']} adjusted by {data.delta:g}: {data.reason}", user["id"], now)),
+         (row["expedition_id"], "inventory", message, user["id"], now)),
     ])
-    await broadcast(env, row["expedition_id"], "inventory.adjusted", "inventory", item_id, {"quantity": new_qty})
-    return {"ok": True, "quantity": new_qty}
+    await broadcast(env, row["expedition_id"], "inventory.adjusted", "inventory", item_id, {
+        "quantity": new_qty, "delta": actual_delta, "reason": reason
+    })
+    return {"ok": True, "quantity": new_qty, "delta": actual_delta, "reason": reason}
 
 
 # ----------------------------- Vehicles/assets ----------------------------
