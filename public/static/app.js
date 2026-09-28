@@ -266,7 +266,7 @@
       </header><section id="view"></section></main></div>`;
     applyPolarTheme();
     $$('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
-    $$('[data-pole]').forEach(b=>b.addEventListener('click',()=>switchPole(b.dataset.pole)));
+    $$('.polar-switch button[data-pole]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();switchPole(b.dataset.pole)}));
     $('.logout-btn').addEventListener('click',()=>logout());
     $('#expeditionSelect').addEventListener('change',e=>switchExpedition(Number(e.target.value)));
     $('#globalSOS').addEventListener('click',()=>openIncidentCreate()); updateSync();updateRealtimeIndicator();
