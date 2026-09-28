@@ -76,16 +76,29 @@ async def ensure_entity_in_expedition(env, table: str, item_id, expedition_id: i
 
 async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
     result = []
-    overdue = await q_all(
-        env,
-        """SELECT p.id,p.name,l.name location_name,p.last_checkin FROM personnel p
+    overdue_sql = """SELECT p.id,p.name,l.name location_name,p.last_checkin FROM personnel p
            LEFT JOIN locations l ON l.id=p.location_id
            WHERE p.expedition_id=? AND (
              p.status='Overdue' OR
              (p.last_checkin IS NOT NULL AND datetime(p.last_checkin) < datetime('now','-12 hours'))
-           ) ORDER BY p.name""",
-        expedition_id,
-    )
+           ) ORDER BY p.name"""
+    low_stock_sql = """SELECT id,name,quantity,min_quantity,unit FROM inventory_items
+           WHERE expedition_id=? AND quantity < min_quantity ORDER BY name"""
+    vehicles_sql = """SELECT id,code,name,status,fuel_percent FROM vehicles
+           WHERE expedition_id=? AND (status!='Operational' OR fuel_percent < 30) ORDER BY code"""
+    checkins_sql = """SELECT id,team_name,channel,expected_at FROM comms_checkins
+           WHERE expedition_id=? AND status='Expected' AND datetime(expected_at) < datetime('now') ORDER BY expected_at"""
+    fences_sql = """SELECT * FROM geofences
+           WHERE expedition_id=? AND active=1
+             AND kind IN ('Safe zone','Restricted area','Hazard zone')
+           ORDER BY id"""
+    overdue, low_stock, vehicles, checkins, fences = await q_batch(env, [
+        (overdue_sql, (expedition_id,)),
+        (low_stock_sql, (expedition_id,)),
+        (vehicles_sql, (expedition_id,)),
+        (checkins_sql, (expedition_id,)),
+        (fences_sql, (expedition_id,)),
+    ])
     for row in overdue:
         result.append({
             "id": f"personnel-{row['id']}", "generated": True, "severity": "Critical",
@@ -94,12 +107,6 @@ async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
             "status": "Open", "entity_type": "personnel", "entity_id": row["id"],
         })
 
-    low_stock = await q_all(
-        env,
-        """SELECT id,name,quantity,min_quantity,unit FROM inventory_items
-           WHERE expedition_id=? AND quantity < min_quantity ORDER BY name""",
-        expedition_id,
-    )
     for row in low_stock:
         result.append({
             "id": f"inventory-{row['id']}", "generated": True, "severity": "Warning",
@@ -108,12 +115,6 @@ async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
             "status": "Open", "entity_type": "inventory", "entity_id": row["id"],
         })
 
-    vehicles = await q_all(
-        env,
-        """SELECT id,code,name,status,fuel_percent FROM vehicles
-           WHERE expedition_id=? AND (status!='Operational' OR fuel_percent < 30) ORDER BY code""",
-        expedition_id,
-    )
     for row in vehicles:
         severity = "Critical" if float(row.get("fuel_percent") or 100) < 15 else "Warning"
         result.append({
@@ -123,12 +124,6 @@ async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
             "status": "Open", "entity_type": "vehicle", "entity_id": row["id"],
         })
 
-    checkins = await q_all(
-        env,
-        """SELECT id,team_name,channel,expected_at FROM comms_checkins
-           WHERE expedition_id=? AND status='Expected' AND datetime(expected_at) < datetime('now') ORDER BY expected_at""",
-        expedition_id,
-    )
     for row in checkins:
         result.append({
             "id": f"comms-{row['id']}", "generated": True, "severity": "Critical",
@@ -137,29 +132,22 @@ async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
             "status": "Open", "entity_type": "comms", "entity_id": row["id"],
         })
 
-    fences = await q_all(
-        env,
-        """SELECT * FROM geofences
-           WHERE expedition_id=? AND active=1
-             AND kind IN ('Safe zone','Restricted area','Hazard zone')
-           ORDER BY id""",
-        expedition_id,
-    )
     if fences:
-        positions = await q_all(
-            env,
-            """SELECT t.* FROM telemetry_positions t
+        positions_sql = """SELECT t.* FROM telemetry_positions t
                JOIN (
                  SELECT entity_type,entity_id,MAX(id) max_id
                  FROM telemetry_positions
                  WHERE expedition_id=? AND entity_type IN ('personnel','vehicle')
                  GROUP BY entity_type,entity_id
                ) latest ON latest.max_id=t.id
-               WHERE datetime(t.recorded_at) >= datetime('now','-24 hours')""",
-            expedition_id,
-        )
-        people = {int(r["id"]): r["name"] for r in await q_all(env, "SELECT id,name FROM personnel WHERE expedition_id=?", expedition_id)}
-        vehicles_by_id = {int(r["id"]): f"{r['code']} · {r['name']}" for r in await q_all(env, "SELECT id,code,name FROM vehicles WHERE expedition_id=?", expedition_id)}
+               WHERE datetime(t.recorded_at) >= datetime('now','-24 hours')"""
+        positions, people_rows, vehicle_rows = await q_batch(env, [
+            (positions_sql, (expedition_id,)),
+            ("SELECT id,name FROM personnel WHERE expedition_id=?", (expedition_id,)),
+            ("SELECT id,code,name FROM vehicles WHERE expedition_id=?", (expedition_id,)),
+        ])
+        people = {int(r["id"]): r["name"] for r in people_rows}
+        vehicles_by_id = {int(r["id"]): f"{r['code']} · {r['name']}" for r in vehicle_rows}
         for pos in positions:
             entity_type = str(pos.get("entity_type") or "")
             entity_id = int(pos["entity_id"])
@@ -196,14 +184,16 @@ async def synthesized_alerts(env, expedition_id: int) -> list[dict]:
 async def operations_summary(request: Request, expedition_id: int, user=Depends(require_permission("operations.read"))):
     env, _ = await access(request, user, expedition_id)
     now = now_iso()
-    tasks = await q_all(env, "SELECT * FROM mission_tasks WHERE expedition_id=? ORDER BY COALESCE(start_at,due_at,created_at) DESC LIMIT 100", expedition_id)
-    routes = await q_all(env, "SELECT * FROM planned_routes WHERE expedition_id=? ORDER BY created_at DESC LIMIT 50", expedition_id)
-    geofences = await q_all(env, "SELECT * FROM geofences WHERE expedition_id=? ORDER BY active DESC,name", expedition_id)
-    handovers = await q_all(env, "SELECT h.*,u.name author_name FROM shift_handovers h LEFT JOIN users u ON u.id=h.author_user_id WHERE h.expedition_id=? ORDER BY h.created_at DESC LIMIT 10", expedition_id)
-    manual_alerts = await q_all(env, "SELECT * FROM ops_alerts WHERE expedition_id=? AND status!='Resolved' ORDER BY created_at DESC", expedition_id)
+    tasks, routes, geofences, handovers, manual_alerts, comms, readiness = await q_batch(env, [
+        ("SELECT * FROM mission_tasks WHERE expedition_id=? ORDER BY COALESCE(start_at,due_at,created_at) DESC LIMIT 100", (expedition_id,)),
+        ("SELECT * FROM planned_routes WHERE expedition_id=? ORDER BY created_at DESC LIMIT 50", (expedition_id,)),
+        ("SELECT * FROM geofences WHERE expedition_id=? ORDER BY active DESC,name", (expedition_id,)),
+        ("SELECT h.*,u.name author_name FROM shift_handovers h LEFT JOIN users u ON u.id=h.author_user_id WHERE h.expedition_id=? ORDER BY h.created_at DESC LIMIT 10", (expedition_id,)),
+        ("SELECT * FROM ops_alerts WHERE expedition_id=? AND status!='Resolved' ORDER BY created_at DESC", (expedition_id,)),
+        ("SELECT * FROM comms_checkins WHERE expedition_id=? ORDER BY expected_at DESC LIMIT 50", (expedition_id,)),
+        ("SELECT * FROM readiness_items WHERE expedition_id=? ORDER BY category,label", (expedition_id,)),
+    ])
     generated = await synthesized_alerts(env, expedition_id)
-    comms = await q_all(env, "SELECT * FROM comms_checkins WHERE expedition_id=? ORDER BY expected_at DESC LIMIT 50", expedition_id)
-    readiness = await q_all(env, "SELECT * FROM readiness_items WHERE expedition_id=? ORDER BY category,label", expedition_id)
     complete = sum(1 for r in readiness if r.get("status") == "Complete")
     return {
         "now": now,
