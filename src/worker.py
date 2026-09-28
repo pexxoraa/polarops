@@ -18,7 +18,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
 from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf_fetch
-from js import WebSocketPair
+from js import Buffer, Object, TextEncoder, Uint8Array, WebSocketPair, crypto
+from pyodide.ffi import to_js as _to_js
 
 APP_VERSION = "2.0.0-cloudflare"
 DEFAULT_COMNAP_URL = "https://www.comnap.aq/s/Facilities_Nov2024.csv"
@@ -91,26 +92,57 @@ def last_row_id(result) -> int:
         return int(meta.get("last_row_id") or 0)
 
 
-def hash_password(password: str, salt: bytes | None = None) -> str:
-    salt = salt or uuid.uuid4().hex.encode()
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 180_000)
-    return (
-        "pbkdf2_sha256$180000$"
-        + base64.urlsafe_b64encode(salt).decode()
-        + "$"
-        + base64.urlsafe_b64encode(digest).decode()
+def _js_obj(value):
+    return _to_js(value, dict_converter=Object.fromEntries)
+
+
+_ENCODER = TextEncoder.new()
+_BUFFER_FROM = getattr(Buffer, "from")
+
+
+async def _pbkdf2_bits(password: str, salt_js, rounds: int):
+    key = await crypto.subtle.importKey(
+        "raw",
+        _ENCODER.encode(password),
+        "PBKDF2",
+        False,
+        ["deriveBits"],
+    )
+    return await crypto.subtle.deriveBits(
+        _js_obj({
+            "name": "PBKDF2",
+            "salt": salt_js,
+            "iterations": int(rounds),
+            "hash": "SHA-256",
+        }),
+        key,
+        256,
     )
 
 
-def verify_password(password: str, encoded: str) -> bool:
+async def hash_password(password: str) -> str:
+    # Python Workers run on Pyodide, where hashlib.pbkdf2_hmac depends on
+    # OpenSSL functionality that is not available. Use Workers Web Crypto
+    # instead; PBKDF2 is implemented natively by the Workers runtime.
+    salt = crypto.getRandomValues(Uint8Array.new(16))
+    digest = await _pbkdf2_bits(password, salt, 180_000)
+    return (
+        "pbkdf2_sha256$180000$"
+        + str(_BUFFER_FROM(salt).toString("base64"))
+        + "$"
+        + str(_BUFFER_FROM(digest).toString("base64"))
+    )
+
+
+async def verify_password(password: str, encoded: str) -> bool:
     try:
         algo, rounds, salt_b64, digest_b64 = encoded.split("$", 3)
         if algo != "pbkdf2_sha256":
             return False
-        salt = base64.urlsafe_b64decode(salt_b64.encode())
-        expected = base64.urlsafe_b64decode(digest_b64.encode())
-        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(rounds))
-        return hmac.compare_digest(actual, expected)
+        salt = _BUFFER_FROM(salt_b64, "base64")
+        expected = _BUFFER_FROM(digest_b64, "base64")
+        actual = await _pbkdf2_bits(password, salt, int(rounds))
+        return bool(crypto.subtle.timingSafeEqual(actual, expected))
     except Exception:
         return False
 
@@ -472,7 +504,7 @@ async def security_headers(request: Request, call_next):
 async def login(data: LoginIn, request: Request):
     env = request.scope["env"]
     row = await q_first(env, "SELECT * FROM users WHERE lower(email)=lower(?)", data.email.strip())
-    if not row or not row.get("active") or not verify_password(data.password, row["password_hash"]):
+    if not row or not row.get("active") or not await verify_password(data.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     token = make_token(row, env_value(env, "AUTH_SECRET", "dev-only-change-me"))
     return {"token": token, "user": {k: row[k] for k in ("id", "organization_id", "email", "name", "role")}}
@@ -487,9 +519,9 @@ async def me(user=Depends(current_user)):
 async def change_password(data: PasswordChange, request: Request, user=Depends(current_user)):
     env = request.scope["env"]
     row = await q_first(env, "SELECT password_hash FROM users WHERE id=?", user["id"])
-    if not row or not verify_password(data.current_password, row["password_hash"]):
+    if not row or not await verify_password(data.current_password, row["password_hash"]):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
-    await q_write(env, "UPDATE users SET password_hash=? WHERE id=?", hash_password(data.new_password), user["id"])
+    await q_write(env, "UPDATE users SET password_hash=? WHERE id=?", await hash_password(data.new_password), user["id"])
     return {"ok": True}
 
 
@@ -511,7 +543,7 @@ async def add_user(data: UserCreate, request: Request, user=Depends(require("com
         result = await q_write(
             env,
             "INSERT INTO users(organization_id,email,name,role,password_hash,active,created_at) VALUES(?,?,?,?,?,1,?)",
-            user["organization_id"], data.email.strip().lower(), data.name, data.role, hash_password(data.password), utcnow(),
+            user["organization_id"], data.email.strip().lower(), data.name, data.role, await hash_password(data.password), utcnow(),
         )
     except Exception:
         raise HTTPException(409, "Email already exists")
