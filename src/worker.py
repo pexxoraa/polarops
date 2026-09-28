@@ -1028,6 +1028,22 @@ async def environment_overview(expedition_id: int, request: Request, force: bool
             "detail": "Curated discovery page for Antarctic glaciology datasets such as ADD, BedMachine, ice velocity, GLIMS and IBCSO.",
             "update": "Reference/discovery resource, not an operational live feed.",
         },
+        {
+            "name": "INTERACT Virtual Access",
+            "category": "Arctic observations",
+            "regions": ["north"],
+            "url": "https://dataportal.eu-interact.org/",
+            "detail": "Research-station data portal aggregating Arctic and northern observational datasets, including near-real-time observations where providers expose them.",
+            "update": "Dataset cadence varies by station and provider.",
+        },
+        {
+            "name": "Sustaining Arctic Observing Networks (SAON)",
+            "category": "Arctic observing systems",
+            "regions": ["north"],
+            "url": "https://arcticobserving.org/services",
+            "detail": "Inventories and registries for Arctic observational data, observing networks and monitoring programmes.",
+            "update": "Registry/reference service; individual network update cadence varies.",
+        },
     ]
     region_resources = [r for r in resources if pole in r["regions"]]
 
@@ -1464,18 +1480,20 @@ async def sync_comnap(env, offset: int = 0, limit: int = 35) -> dict:
         synced = skipped = 0
         now = utcnow()
         for raw in batch_rows:
-            name = pick(raw, "Facility Name", "Facility", "Station Name", "Name")
+            name = pick(raw, "English Name", "Official Name", "Facility Name", "Facility", "Station Name", "Name")
             if not name:
                 skipped += 1
                 continue
-            country = pick(raw, "Country", "Party", "Nation", "National Antarctic Program Country", "NAP Country")
-            programme = pick(raw, "National Antarctic Program", "National Antarctic Programme", "Operator", "Programme", "Program")
+            country = pick(raw, "Operator (primary)", "Country", "Party", "Nation", "National Antarctic Program Country", "NAP Country")
+            primary_operator = pick(raw, "Operator (primary)")
+            additional_operator = pick(raw, "Operator (additional)")
+            programme = " / ".join(x for x in (primary_operator, additional_operator) if x) or pick(raw, "National Antarctic Program", "National Antarctic Programme", "Operator", "Programme", "Program")
             facility_type = pick(raw, "Facility Type", "Type") or "Facility"
             seasonality = pick(raw, "Operational Period", "Seasonality", "Operation", "Operational Status")
             status = pick(raw, "Status", "Facility Status")
-            lat = parse_coord(pick(raw, "Latitude", "Latitude DD", "Lat", "Y"))
-            lon = parse_coord(pick(raw, "Longitude", "Longitude DD", "Lon", "Lng", "Long", "X"))
-            external = pick(raw, "Facility ID", "ID", "Identifier", "Code")
+            lat = parse_coord(pick(raw, "Latitude (DD)", "Latitude", "Latitude DD", "Lat", "Y"))
+            lon = parse_coord(pick(raw, "Longitude (DD)", "Longitude", "Longitude DD", "Lon", "Lng", "Long", "X"))
+            external = pick(raw, "Record ID#", "Facility ID", "ID", "Identifier", "Code")
             basis = f"{external}|{name}|{country}|{lat}|{lon}"
             source_key = "comnap:" + hashlib.sha256(basis.encode()).hexdigest()[:24]
             await q_write(env, """INSERT INTO public_facilities(source_key,name,country,programme,facility_type,seasonality,status,latitude,longitude,source,source_url,source_updated_at,raw_json,synced_at)
