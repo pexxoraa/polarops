@@ -22,19 +22,33 @@ Baseline result:
 - Python source compiles
 - public/static/app.js passes node --check
 - live /api/health is healthy
-- scripts/offline_checks.py is stale and fails because routes have moved out of worker.py
+- the stale scripts/offline_checks.py assumption was identified before implementation
 
-No production data was modified during this audit.
+No production data was modified during the audit.
 
 ## Phase 1A — Security/integrity fixes
 
-Next implementation, in this order:
-1. validate every related location/personnel/vehicle/telemetry entity against the parent expedition
-2. add tests proving cross-expedition related IDs are rejected
-3. make missing AUTH_SECRET fail closed in authenticated production paths
-4. add/refresh WebSocket tenant-isolation tests
+Status: COMPLETE and deployed.
 
-Deploy and smoke-test before continuing.
+Completed:
+1. related location/personnel references are validated against the parent expedition before mutations
+2. location edits cannot move records between expeditions
+3. telemetry entity ownership remains explicitly checked before position inserts
+4. AUTH_SECRET now fails closed instead of falling back to a shared development value
+5. realtime tenant authorization is isolated behind a tested service/repository boundary
+6. security tests cover cross-expedition related IDs, inactive realtime users, cross-tenant realtime access and ticket reuse across expeditions
+7. scripts/offline_checks.py now discovers modular routes across src/ and applies all migrations in-memory
+
+Validation:
+- 10 unit/security tests pass
+- offline migration/route checks pass
+- Python compile passes
+- frontend JavaScript syntax check passes
+- Cloudflare deployment succeeded
+- production dashboard login/realtime smoke test succeeded
+- production cross-expedition relationship probe returned HTTP 400 without changing data
+
+Deployed Worker version: 32351e64-28fd-4a99-b18c-2838fa385949
 
 ## Phase 1B — Reliability foundation
 
