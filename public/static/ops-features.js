@@ -45,15 +45,39 @@
   }
   async function renderRoutes(){
     const {state,api,$,esc,toast,setHeader,n,numOrNull,formVal,bindPanelMapFullscreen,roleCan}=C();setHeader('Routes & Geofences','Click-to-plan traverses, field zones and weather-aware route cues.');
-    const [d,vehicles,people]=await Promise.all([api(`/api/ops/routes?expedition_id=${state.expeditionId}`),api(`/api/vehicles?expedition_id=${state.expeditionId}`),api(`/api/personnel?expedition_id=${state.expeditionId}`)]);
+    const expedition=state.expeditions.find(e=>Number(e.id)===Number(state.expeditionId));
+    const north=String(expedition?.region||'').toLowerCase().includes('arctic');
+    const stationRequest=north
+      ? api('/api/public/arctic-research-stations').catch(()=>({items:[]}))
+      : api('/api/public/facilities?limit=1000').catch(()=>({items:[]}));
+    const [d,vehicles,people,stationResponse]=await Promise.all([
+      api(`/api/ops/routes?expedition_id=${state.expeditionId}`),
+      api(`/api/vehicles?expedition_id=${state.expeditionId}`),
+      api(`/api/personnel?expedition_id=${state.expeditionId}`),
+      stationRequest
+    ]);
+    const stationCandidates=north
+      ? [...(stationResponse.items||[]),...(stationResponse.reference_items||[]),...(stationResponse.current_additions||[])]
+      : (stationResponse.items||[]);
+    const stationSeen=new Set();
+    const polarStations=stationCandidates.filter(x=>{
+      const lat=Number(x.latitude),lon=Number(x.longitude);
+      if(!Number.isFinite(lat)||!Number.isFinite(lon))return false;
+      if(north&&lat<55)return false;
+      if(!north&&(x.geographic_scope!=='antarctic_treaty_area'||x.facility_type!=='Station'))return false;
+      const key=`${String(x.name||'').trim().toLowerCase()}|${lat.toFixed(5)}|${lon.toFixed(5)}`;
+      if(stationSeen.has(key))return false;
+      stationSeen.add(key);
+      return true;
+    });
     const canManage=roleCan('commander','logistics'),wk='info',cue='Loading current model weather independently from route planning…';
-    $('#view').innerHTML=`<div class="route-layout"><section class="panel dashboard-map-panel" id="routeMapPanel"><div class="panel-head"><div><h2>Route Planner</h2><p>Click start, then destination. Straight-line estimates are planning aids, not certified navigation.</p></div><button class="button ghost small" id="routeFullscreen">⛶ Fullscreen</button></div><div id="routePlannerMap" class="route-planner-map"></div><div class="live-map-note"><span>Validate every traverse with programme-approved navigation products.</span><span>${d.routes.length} saved routes</span></div></section>
+    $('#view').innerHTML=`<div class="route-layout"><section class="panel dashboard-map-panel" id="routeMapPanel"><div class="panel-head"><div><h2>Route Planner</h2><p>Click start, then destination. Polar research stations are public reference infrastructure; straight-line estimates are not certified navigation.</p></div><button class="button ghost small" id="routeFullscreen">⛶ Fullscreen</button></div><div id="routePlannerMap" class="route-planner-map"></div><div class="live-map-note"><span>Validate every traverse with programme-approved navigation products.</span><span>${polarStations.length} research stations · ${d.routes.length} saved routes</span></div></section>
     <aside class="panel route-form-panel"><div class="panel-head"><div><h2>New route</h2><p>Distance, ETA, fuel estimate and assignment.</p></div></div><form id="routeForm"><div class="field"><label>Name</label><input name="name" required></div><div class="form-grid"><div class="field"><label>Start lat</label><input name="start_lat" readonly required></div><div class="field"><label>Start lon</label><input name="start_lon" readonly required></div><div class="field"><label>End lat</label><input name="end_lat" readonly required></div><div class="field"><label>End lon</label><input name="end_lon" readonly required></div></div>
     <div class="form-grid"><div class="field"><label>Vehicle</label><select name="vehicle_id"><option value="">Unassigned</option>${vehicles.map(v=>`<option value="${v.id}">${esc(v.code)} · ${esc(v.name)}</option>`).join('')}</select></div><div class="field"><label>Team lead</label><select name="personnel_id"><option value="">Unassigned</option>${people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div><div class="field"><label>Speed km/h</label><input name="speed_kph" type="number" value="20" min="1"></div><div class="field"><label>Fuel L/km</label><input name="liters_per_km" type="number" value=".45" step=".05" min="0"></div></div><button class="button primary full-button" ${canManage?'':'disabled title="Commander or logistics role required"'}>Save route</button></form>
     <div class="route-weather-cue ${wk}"><strong>Weather + route risk cue</strong><p>${esc(cue)}</p><small id="routeWeatherSource">Route tools remain usable while environmental data loads.</small></div></aside></div>
     <div class="ops-grid" style="margin-top:13px"><section class="panel"><div class="panel-head"><div><h2>Saved routes</h2><p>Planned traverses and field movements.</p></div></div><div class="table-wrap"><table><thead><tr><th>Route</th><th>Distance</th><th>ETA</th><th>Fuel</th><th>Status</th><th>Risk cue</th></tr></thead><tbody>${d.routes.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${n(r.start_lat,4)}, ${n(r.start_lon,4)} → ${n(r.end_lat,4)}, ${n(r.end_lon,4)}</small></td><td>${n(r.distance_km,1)} km</td><td>${Math.round(Number(r.eta_minutes||0))} min</td><td>${n(r.fuel_liters,1)} L</td><td>${C().badge(r.status,kind(r.status))}</td><td>${esc(r.risk_summary||'—')}</td></tr>`).join('')||'<tr><td colspan="6">No saved routes.</td></tr>'}</tbody></table></div></section>
     <aside class="panel"><div class="panel-head"><div><h2>Geofences</h2><p>Safe zones, restricted areas, hazard buffers and landing zones.</p></div></div><form id="geofenceForm"><div class="field"><label>Name</label><input name="name" required></div><div class="form-grid"><div class="field"><label>Type</label><select name="kind"><option>Safe zone</option><option>Restricted area</option><option>Hazard zone</option><option>Landing zone</option><option>Science area</option></select></div><div class="field"><label>Radius m</label><input name="radius_m" type="number" value="1000" min="10"></div><div class="field"><label>Latitude</label><input name="center_lat" required></div><div class="field"><label>Longitude</label><input name="center_lon" required></div></div><button type="button" class="button ghost small" id="useMapCenter">Use map center</button> <button class="button secondary small" ${canManage?'':'disabled title="Commander or logistics role required"'}>Create geofence</button></form><div class="zone-list">${d.geofences.map(g=>`<div class="zone-item"><strong>${esc(g.name)}</strong><span>${esc(g.kind)} · ${n(g.radius_m)} m</span></div>`).join('')||'<div class="empty">No geofences created.</div>'}</div></aside></div>`;
-    initRouteMap(d.routes,d.geofences);bindPanelMapFullscreen('routeMapPanel','routeFullscreen');
+    initRouteMap(d.routes,d.geofences,polarStations,north);bindPanelMapFullscreen('routeMapPanel','routeFullscreen');
     $('#routeForm').onsubmit=async e=>{e.preventDefault();if(!canManage){toast('Read-only route view','Commander or logistics role required to save routes.','warn');return}const f=e.currentTarget;if(!formVal(f,'start_lat')||!formVal(f,'end_lat')){toast('Select route points','Click start and destination on the map.','warn');return}const p={expedition_id:state.expeditionId,name:formVal(f,'name'),start_lat:Number(formVal(f,'start_lat')),start_lon:Number(formVal(f,'start_lon')),end_lat:Number(formVal(f,'end_lat')),end_lon:Number(formVal(f,'end_lon')),vehicle_id:numOrNull(formVal(f,'vehicle_id')),personnel_id:numOrNull(formVal(f,'personnel_id')),speed_kph:Number(formVal(f,'speed_kph')||20),liters_per_km:Number(formVal(f,'liters_per_km')||.45)};try{await api('/api/ops/routes',{method:'POST',body:JSON.stringify(p)});toast('Route saved',p.name);renderRoutes()}catch(err){toast('Route save failed',err.message,'danger')}};
     $('#useMapCenter').onclick=()=>{const c=C().state.liveMap?.getCenter();if(c){$('#geofenceForm [name=center_lat]').value=c.lat.toFixed(6);$('#geofenceForm [name=center_lon]').value=c.lng.toFixed(6)}};
     $('#geofenceForm').onsubmit=async e=>{e.preventDefault();if(!canManage){toast('Read-only zone view','Commander or logistics role required to create geofences.','warn');return}const f=e.currentTarget,p={expedition_id:state.expeditionId,name:formVal(f,'name'),kind:formVal(f,'kind'),radius_m:Number(formVal(f,'radius_m')),center_lat:Number(formVal(f,'center_lat')),center_lon:Number(formVal(f,'center_lon'))};try{await api('/api/ops/geofences',{method:'POST',body:JSON.stringify(p)});toast('Geofence created',p.name);renderRoutes()}catch(err){toast('Geofence failed',err.message,'danger')}};
@@ -71,16 +95,82 @@
       const card=$('.route-weather-cue');if(!card)return;card.className=`route-weather-cue ${cls}`;const p=card.querySelector('p'),small=$('#routeWeatherSource');if(p)p.textContent=cue;if(small)small.textContent=w?`${w.source||'Open-Meteo'} · ${fmtDate(w.observed_at)}`:'Environmental feed returned no current weather.';
     }catch(err){const card=$('.route-weather-cue'),small=$('#routeWeatherSource');if(card)card.className='route-weather-cue warn';if(small)small.textContent='Environmental feed unavailable; route planning remains available.'}
   }
-  function initRouteMap(routes,zones){
+  function initRouteMap(routes,zones,stations=[],north=false){
     const {state,$,destroyLiveMap,addMapDataControl,esc,n}=C(),el=$('#routePlannerMap');if(!el||!window.L)return;destroyLiveMap();
-    const exp=state.expeditions.find(e=>e.id===state.expeditionId),north=String(exp?.region||'').toLowerCase().includes('arctic');
     state.liveMap=L.map(el,{attributionControl:false,minZoom:2,maxZoom:18,zoomAnimation:false,fadeAnimation:false}).setView(north?[72,10]:[-75,30],3);
     const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1}).addTo(state.liveMap);
-    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1}),saved=L.layerGroup().addTo(state.liveMap),gf=L.layerGroup().addTo(state.liveMap),draft=L.layerGroup().addTo(state.liveMap);
-    routes.forEach(r=>L.polyline([[+r.start_lat,+r.start_lon],[+r.end_lat,+r.end_lon]],{weight:3,opacity:.8}).addTo(saved).bindPopup(`<strong>${esc(r.name)}</strong><br>${n(r.distance_km,1)} km`));
-    zones.filter(z=>z.active).forEach(z=>L.circle([+z.center_lat,+z.center_lon],{radius:+z.radius_m,weight:2,fillOpacity:.08}).addTo(gf).bindPopup(`<strong>${esc(z.name)}</strong><br>${esc(z.kind)} · ${n(z.radius_m)} m`));
-    L.control.layers({'Satellite':sat,'Topographic':topo},{'Saved routes':saved,'Geofences':gf},{collapsed:false}).addTo(state.liveMap);addMapDataControl(state.liveMap);let pts=[];
-    state.liveMap.on('click',e=>{if(pts.length>=2){pts=[];draft.clearLayers()}pts.push(e.latlng);L.circleMarker(e.latlng,{radius:6,weight:2,fillOpacity:.9}).addTo(draft);const f=$('#routeForm');if(pts.length===1){f.elements.start_lat.value=e.latlng.lat.toFixed(6);f.elements.start_lon.value=e.latlng.lng.toFixed(6);f.elements.end_lat.value='';f.elements.end_lon.value=''}else{f.elements.end_lat.value=e.latlng.lat.toFixed(6);f.elements.end_lon.value=e.latlng.lng.toFixed(6);L.polyline(pts,{weight:4,dashArray:'8 6'}).addTo(draft)}});setTimeout(()=>state.liveMap?.invalidateSize(),60);
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,updateWhenIdle:true,keepBuffer:1});
+    const saved=L.layerGroup().addTo(state.liveMap),gf=L.layerGroup().addTo(state.liveMap),draft=L.layerGroup().addTo(state.liveMap);
+    const stationLayer=L.layerGroup().addTo(state.liveMap),referenceLayer=L.layerGroup();
+
+    routes.forEach(r=>L.polyline([[+r.start_lat,+r.start_lon],[+r.end_lat,+r.end_lon]],{weight:3,opacity:.8}).addTo(saved).bindPopup('<strong>'+esc(r.name)+'</strong><br>'+n(r.distance_km,1)+' km'));
+    zones.filter(z=>z.active).forEach(z=>L.circle([+z.center_lat,+z.center_lon],{radius:+z.radius_m,weight:2,fillOpacity:.08}).addTo(gf).bindPopup('<strong>'+esc(z.name)+'</strong><br>'+esc(z.kind)+' · '+n(z.radius_m)+' m'));
+
+    let verifiedCount=0,referenceCount=0;
+    stations.forEach(s=>{
+      const lat=Number(s.latitude),lon=Number(s.longitude);
+      if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
+      if(north){
+        const verified=String(s.verification_status||'').startsWith('verified_');
+        if(verified)verifiedCount++;else referenceCount++;
+        const target=verified?stationLayer:referenceLayer;
+        const proof=s.verification_url?'<br><a href="'+esc(s.verification_url)+'" target="_blank" rel="noopener">Verification proof ↗</a>':'';
+        const profile=verified&&s.id!=null?'<br><button class="popup-profile-btn" onclick="window.PolarOpsFeatures.openFacilityProfile(\'north\','+Number(s.id)+')">Station profile</button>':'';
+        L.circleMarker([lat,lon],{
+          radius:verified?5:4,weight:1.3,
+          color:verified?'#6842c2':'#7d8994',
+          fillColor:verified?'#8a63df':'#a8b1b8',
+          fillOpacity:verified?.9:.68,
+          bubblingMouseEvents:false
+        }).addTo(target)
+          .bindTooltip(esc(s.name||'Research station'),{direction:'top',sticky:true})
+          .bindPopup('<div class="public-facility-popup"><span class="popup-kicker">'+(verified?'VERIFIED CURRENT ARCTIC RESEARCH':'REFERENCE-ONLY ARCTIC STATION')+'</span><strong>'+esc(s.name||'Research station')+'</strong><br>'+esc(s.location||'Location not supplied')+'<br>'+esc(s.operating_country||'Operator/country not supplied')+'<br><small>'+esc(s.verification_source||s.verification_note||'Public research-station reference')+'</small><br><small>'+n(lat,5)+', '+n(lon,5)+'</small>'+proof+profile+'<br><small>Reference infrastructure — not live occupancy.</small></div>');
+      }else{
+        verifiedCount++;
+        const profile=s.id!=null?'<br><button class="popup-profile-btn" onclick="window.PolarOpsFeatures.openFacilityProfile(\'south\','+Number(s.id)+')">Facility profile</button>':'';
+        L.circleMarker([lat,lon],{
+          radius:5,weight:1.4,color:'#6842c2',fillColor:'#8a63df',fillOpacity:.9,bubblingMouseEvents:false
+        }).addTo(stationLayer)
+          .bindTooltip(esc(s.name||'Antarctic research base'),{direction:'top',sticky:true})
+          .bindPopup('<div class="public-facility-popup"><span class="popup-kicker">ANTARCTIC RESEARCH BASE</span><strong>'+esc(s.name||'Research base')+'</strong><br>'+esc(s.country||s.programme||'Antarctic programme')+'<br>'+esc(s.seasonality||'')+' · '+esc(s.status||'Status not supplied')+'<br><small>'+n(lat,5)+', '+n(lon,5)+'</small>'+profile+'<br><small>Public COMNAP reference — not live occupancy or access authorization.</small></div>');
+      }
+    });
+
+    const overlays={'Saved routes':saved,'Geofences':gf};
+    if(north){
+      overlays['Verified research stations ('+verifiedCount+')']=stationLayer;
+      overlays['Reference-only stations ('+referenceCount+')']=referenceLayer;
+    }else{
+      overlays['Antarctic research bases ('+verifiedCount+')']=stationLayer;
+    }
+    L.control.layers({'Satellite':sat,'Topographic':topo},overlays,{collapsed:false}).addTo(state.liveMap);
+    addMapDataControl(state.liveMap);
+
+    const legend=L.control({position:'bottomleft'});
+    legend.onAdd=()=>{
+      const div=L.DomUtil.create('div','mission-map-legend');
+      div.innerHTML=north
+        ? '<strong>Route map</strong><span><i class="legend-dot research"></i>Verified research station</span><span><i class="legend-dot reference"></i>Reference-only station</span>'
+        : '<strong>Route map</strong><span><i class="legend-dot research"></i>Antarctic research base</span>';
+      L.DomEvent.disableClickPropagation(div);return div;
+    };
+    legend.addTo(state.liveMap);
+
+    let pts=[];
+    state.liveMap.on('click',e=>{
+      if(pts.length>=2){pts=[];draft.clearLayers()}
+      pts.push(e.latlng);
+      L.circleMarker(e.latlng,{radius:6,weight:2,fillOpacity:.9}).addTo(draft);
+      const f=$('#routeForm');
+      if(pts.length===1){
+        f.elements.start_lat.value=e.latlng.lat.toFixed(6);f.elements.start_lon.value=e.latlng.lng.toFixed(6);
+        f.elements.end_lat.value='';f.elements.end_lon.value='';
+      }else{
+        f.elements.end_lat.value=e.latlng.lat.toFixed(6);f.elements.end_lon.value=e.latlng.lng.toFixed(6);
+        L.polyline(pts,{weight:4,dashArray:'8 6'}).addTo(draft);
+      }
+    });
+    setTimeout(()=>state.liveMap?.invalidateSize(),60);
   }
 
   async function renderAlerts(){
