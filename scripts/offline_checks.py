@@ -47,7 +47,7 @@ required = [
     "/api/vehicles", "/api/assets", "/api/incidents", "/api/activity",
     "/api/data-sources", "/api/public/facilities", "/api/backup",
     "/api/telemetry/position", "/api/integrations/workers/status",
-    "/api/environment/overview", "/api/public/arctic-research-stations",
+    "/api/bootstrap", "/api/environment/overview", "/api/public/arctic-research-stations",
     "/api/ops/summary", "/api/ops/routes", "/api/ops/alerts", "/api/ops/science",
     "/api/ops/comms", "/api/ops/readiness", "/api/ops/sitrep", "/api/ops/search", "/api/ops/audit",
 ]

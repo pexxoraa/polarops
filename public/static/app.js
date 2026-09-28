@@ -337,14 +337,13 @@
 
   async function bootAuthed(){
     try{
-      const [user,expeditions]=await Promise.all([
-        api('/api/me',{noFastCache:true}),
-        api('/api/expeditions',{noFastCache:true})
-      ]);
-      state.user=user;state.expeditions=expeditions;
+      const preferred=Number(localStorage.getItem('polarops_expedition'))||0;
+      const boot=await api(`/api/bootstrap${preferred?`?expedition_id=${preferred}`:''}`,{noFastCache:true});
+      state.user=boot.user;state.expeditions=boot.expeditions||[];
       if(!state.expeditions.length)throw new Error('No expedition exists. Create one through the API or reseed demo mode.');
-      state.expeditionId=Number(localStorage.getItem('polarops_expedition'))||state.expeditions[0].id;
-      if(!state.expeditions.some(e=>e.id===state.expeditionId))state.expeditionId=state.expeditions[0].id;
+      state.expeditionId=Number(boot.expedition_id)||state.expeditions[0].id;
+      localStorage.setItem('polarops_expedition',state.expeditionId);
+      if(boot.dashboard)fastCacheSet(`/api/dashboard?expedition_id=${state.expeditionId}`,boot.dashboard);
       renderShell();await renderView();connectRealtime();startFallbackRefresh();setTimeout(prefetchMissionData,80);
     }catch(e){ toast('Unable to start platform',e.message,'danger',4500); logout(false); }
   }

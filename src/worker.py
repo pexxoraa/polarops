@@ -295,6 +295,27 @@ async def me(user=Depends(current_user)):
     return user
 
 
+@app.get("/api/bootstrap")
+async def bootstrap(request: Request, expedition_id: int | None = None, user=Depends(current_user)):
+    env = request.scope["env"]
+    expeditions_rows = await q_all(
+        env,
+        "SELECT * FROM expeditions WHERE organization_id=? ORDER BY id DESC",
+        user["organization_id"],
+    )
+    if not expeditions_rows:
+        return {"user": user, "expeditions": [], "expedition_id": None, "dashboard": None}
+    allowed_ids = {int(row["id"]) for row in expeditions_rows}
+    selected_id = int(expedition_id) if expedition_id is not None and int(expedition_id) in allowed_ids else int(expeditions_rows[0]["id"])
+    dashboard_data = await dashboard(selected_id, request, user)
+    return {
+        "user": user,
+        "expeditions": expeditions_rows,
+        "expedition_id": selected_id,
+        "dashboard": dashboard_data,
+    }
+
+
 @app.get("/api/realtime/ticket")
 async def realtime_ticket(expedition_id: int, request: Request, user=Depends(current_user)):
     env = request.scope["env"]
