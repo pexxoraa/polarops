@@ -125,9 +125,9 @@ async def _pbkdf2_bytes(password: str, salt: bytes, rounds: int) -> bytes:
 async def hash_password(password: str) -> str:
     salt_js = crypto.getRandomValues(Uint8Array.new(16))
     salt = bytes(salt_js.to_py())
-    digest = await _pbkdf2_bytes(password, salt, 180_000)
+    digest = await _pbkdf2_bytes(password, salt, 100_000)
     return (
-        "pbkdf2_sha256$180000$"
+        "pbkdf2_sha256$100000$"
         + base64.urlsafe_b64encode(salt).decode()
         + "$"
         + base64.urlsafe_b64encode(digest).decode()
