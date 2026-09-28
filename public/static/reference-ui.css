@@ -158,3 +158,9 @@ body[data-pole="north"] .polar-switch button[data-pole="north"].active{backgroun
 /* Public polar facility map */
 .network-map-panel{margin-bottom:10px}.facility-network-map{height:410px;border:1px solid #c9dbe7;border-radius:7px;overflow:hidden;background:#dbe8f0}.facility-network-map .leaflet-popup-content{font-size:10px;line-height:1.5}
 @media(max-width:760px){.facility-network-map{height:340px}}
+
+/* Supplied COMNAP research-stations map reference */
+.historical-stations-panel{border-left:3px solid #8b72d8}
+.reference-source-note{display:flex;justify-content:space-between;gap:14px;margin:0 0 9px;padding:8px 10px;border:1px solid #ded8f2;border-radius:7px;background:#f8f6ff;color:#5d5574;font-size:8px}
+.reference-source-note strong{color:#4d3f7f}.reference-table-wrap{max-height:390px;overflow:auto}
+@media(max-width:760px){.reference-source-note{display:block}.reference-source-note span{display:block;margin-top:4px}}

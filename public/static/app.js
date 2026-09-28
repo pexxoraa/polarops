@@ -670,17 +670,21 @@
   async function renderNetwork(){
     if(currentPole()==='north'){await renderArcticNetwork();return}
     setHeader('Antarctic Network','Official public facilities reference data, live environmental conditions and mission-base import.');
-    const [sources,data]=await Promise.all([
+    const [sources,data,reference]=await Promise.all([
       api('/api/data-sources'),
-      api('/api/public/facilities?limit=1000')
+      api('/api/public/facilities?limit=1000'),
+      api('/api/public/research-stations-reference')
     ]);
     const facilities=data.items||[], countries=data.countries||[];
+    const referenceStations=reference.items||[];
+    const currentFacilityKeys=new Set(facilities.map(f=>`${String(f.name||'').trim().toLowerCase()}|${String(f.country||'').trim().toLowerCase()}`));
     const comnap=(sources.sources||[]).find(x=>x.name==='COMNAP Facilities');
     $('#view').innerHTML=`
       <div class="source-strip network-source-strip">
         <div><span>Public facilities</span><strong>${data.total||0}</strong></div>
         <div><span>Countries/programmes</span><strong>${countries.length}</strong></div>
         <div><span>Facility source</span><strong>COMNAP</strong></div>
+        <div><span>Map reference</span><strong>${reference.total||referenceStations.length}</strong></div>
         <div><span>Current weather</span><strong>Open-Meteo</strong></div>
         <div class="source-note"><strong>${esc(comnap?.last_status||'Never synced')}</strong><span>${comnap?.last_sync?`Last facility sync ${fmtDate(comnap.last_sync)}`:'Sync the official COMNAP facilities CSV to populate the global directory.'}</span></div>
       </div>
@@ -688,7 +692,11 @@
       <section class="panel"><div class="panel-head"><div><h2>Antarctic Facilities Directory</h2><p>Reference facilities from national Antarctic programmes. This directory is public infrastructure metadata—not permission to use another operator's facility.</p></div><div class="panel-actions"><input class="search" id="facilitySearch" placeholder="Station, country or programme…"><select class="search" id="facilityCountry"><option value="">All countries</option>${countries.map(c=>`<option value="${esc(c.country)}">${esc(c.country)} (${c.count})</option>`).join('')}</select>${roleCan('commander','logistics')?'<button class="button secondary" id="syncFacilities">↻ Sync COMNAP</button>':''}</div></div>
         ${facilities.length?`<div class="table-wrap"><table><thead><tr><th>Facility</th><th>Country / Programme</th><th>Type</th><th>Operation</th><th>Coordinates</th><th>Current conditions</th><th>Actions</th></tr></thead><tbody id="facilityRows"></tbody></table></div>`:`<div class="empty" style="min-height:320px"><div><strong>No public facilities synchronized yet</strong>Press “Sync COMNAP” to download the official COMNAP Antarctic Facilities List into PolarOps. Internet access is required for the first sync.</div></div>`}
       </section>
-      <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>Keep public reference data separate from private operational data.</p></div></div><div class="data-boundary-grid"><div><strong>Public reference</strong><span>Facility names, operators, coordinates and status from COMNAP.</span></div><div><strong>Live environment</strong><span>Current model conditions for facility coordinates from Open-Meteo; not a station instrument feed.</span></div><div><strong>Workers</strong><span>Live worker rosters/locations come only from your authorized feed, field check-ins or consented device GPS. PolarOps does not scrape people.</span></div></div></section>`;
+      <section class="panel historical-stations-panel" style="margin-top:13px"><div class="panel-head"><div><h2>Research Stations Map Reference</h2><p>${esc(reference.warning||'Historical reference only.')} The supplied map lists ${referenceStations.length} numbered stations.</p></div><div class="panel-actions"><a class="button secondary" href="${esc(reference.source_url||'/research-stations-map.pdf')}" target="_blank" rel="noopener">Open source PDF</a></div></div>
+        <div class="reference-source-note"><strong>${esc(reference.source||'COMNAP Research Stations Map')}</strong><span>Source period: ${esc(reference.source_period||'1998-2005')} · historical names are not treated as current operational status.</span></div>
+        <div class="table-wrap reference-table-wrap"><table><thead><tr><th>Map #</th><th>Station</th><th>Country</th><th>Current directory exact match</th></tr></thead><tbody>${referenceStations.map(r=>{const key=`${String(r.station_name||'').trim().toLowerCase()}|${String(r.country||'').trim().toLowerCase()}`;const matched=currentFacilityKeys.has(key);return `<tr><td class="mono">${r.map_number}</td><td><strong>${esc(r.station_name)}</strong></td><td>${esc(r.country)}</td><td>${badge(matched?'Matched':'Historical only',matched?'good':'info')}</td></tr>`}).join('')}</tbody></table></div>
+      </section>
+      <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>Keep public reference data separate from private operational data.</p></div></div><div class="data-boundary-grid"><div><strong>Current public reference</strong><span>Facility names, operators, coordinates and status from the November 2024 COMNAP facilities data.</span></div><div><strong>Historical map reference</strong><span>The supplied COMNAP research-stations map is preserved as a separate 1998–2005 reference and never overwrites current facility status.</span></div><div><strong>Workers</strong><span>Live worker rosters/locations come only from your authorized feed, field check-ins or consented device GPS. PolarOps does not scrape people.</span></div></div></section>`;
     if(facilities.length){
       initFacilityNetworkMap(facilities);
       const paint=()=>{
