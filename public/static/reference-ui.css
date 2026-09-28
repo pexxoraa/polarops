@@ -244,3 +244,53 @@ body.map-fullscreen-open{overflow:hidden}
 /* Navigation latency polish */
 #view{transition:opacity .12s ease}
 #view.view-loading{opacity:.76;pointer-events:none}
+
+/* Routes & Zones form visibility fix */
+.route-form-panel .field label,
+#geofenceForm .field label{
+  color:#46667f;
+  font-weight:800;
+}
+.route-form-panel .field input,
+.route-form-panel .field select,
+.route-form-panel .field textarea,
+#geofenceForm .field input,
+#geofenceForm .field select,
+#geofenceForm .field textarea{
+  background:#fff;
+  color:#12344d;
+  border:1px solid #c7d8e5;
+  box-shadow:none;
+}
+.route-form-panel .field input::placeholder,
+.route-form-panel .field textarea::placeholder,
+#geofenceForm .field input::placeholder,
+#geofenceForm .field textarea::placeholder{
+  color:#8ca1b2;
+  opacity:1;
+}
+.route-form-panel .field input[readonly],
+#geofenceForm .field input[readonly]{
+  background:#f4f8fb;
+  color:#34556d;
+}
+.route-form-panel .field select,
+#geofenceForm .field select{
+  color-scheme:light;
+}
+.route-form-panel .field select option,
+#geofenceForm .field select option{
+  background:#fff;
+  color:#12344d;
+}
+.route-form-panel .field input:focus,
+.route-form-panel .field select:focus,
+.route-form-panel .field textarea:focus,
+#geofenceForm .field input:focus,
+#geofenceForm .field select:focus,
+#geofenceForm .field textarea:focus{
+  border-color:#268ce0;
+  box-shadow:0 0 0 3px rgba(38,140,224,.12);
+}
+.route-weather-cue p{font-size:8px;line-height:1.45}
+.route-weather-cue small{font-size:7.5px;line-height:1.4}
