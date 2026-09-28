@@ -3,7 +3,6 @@ import hashlib
 import io
 import json
 
-from js import TextDecoder
 from workers import fetch as cf_fetch
 
 from core.config import DEFAULT_COMNAP_URL, env_value
@@ -22,8 +21,8 @@ async def fetch_facilities(env) -> tuple[str, list[NormalizedFacility]]:
     # encoding. Response.text() assumes UTF-8 and replaces accented characters
     # (for example Cámara and Bahía) with U+FFFD. Decode the raw response using
     # the Encoding Standard so station names remain authoritative.
-    body = await response.arrayBuffer()
-    text = str(TextDecoder.new("windows-1252").decode(body))
+    body = await response.bytes()
+    text = body.decode("windows-1252")
     reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
     facilities: list[NormalizedFacility] = []
 
