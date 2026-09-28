@@ -13,7 +13,7 @@
     fallbackTimer:null, deferredRealtime:false,
     gpsWatchId:null, gpsPersonnelId:null, gpsLastSent:0,
     vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null,
-    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}, renderInProgress:false
+    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}, renderInProgress:false, renderQueued:false
   };
 
   const navItems=[
@@ -310,16 +310,18 @@
   async function navigate(view){ state.view=view; $$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); await renderView(); }
   function setHeader(title,subtitle){ const exp=state.expeditions.find(e=>e.id===state.expeditionId); $('#pageTitle').textContent=title;$('#pageSubtitle').textContent=subtitle||'';$('#crumb').textContent=`POLAR OPERATIONS / ${exp?.name||''}`; document.title=`${title} — PolarOps`; }
   async function renderView(){
-    if(state.renderInProgress)return;
+    if(state.renderInProgress){state.renderQueued=true;return}
     state.renderInProgress=true;
+    const requestedView=state.view;
     try{
       destroyLiveMap();
       const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
       try{
-        if(state.view==='overview')await renderOverview(); else if(state.view==='operations')await window.PolarOpsFeatures.renderOperations(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='routes')await window.PolarOpsFeatures.renderRoutes(); else if(state.view==='science')await window.PolarOpsFeatures.renderScience(); else if(state.view==='comms')await window.PolarOpsFeatures.renderComms(); else if(state.view==='readiness')await window.PolarOpsFeatures.renderReadiness(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='environment')await renderEnvironment(); else if(state.view==='network')await renderNetwork(); else if(state.view==='alerts')await window.PolarOpsFeatures.renderAlerts(); else if(state.view==='activity')await window.PolarOpsFeatures.renderAudit(); else if(state.view==='settings')await renderSettings();
-      }catch(e){ v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger'); }
+        if(requestedView==='overview')await renderOverview(); else if(requestedView==='operations')await window.PolarOpsFeatures.renderOperations(); else if(requestedView==='personnel')await renderPersonnel(); else if(requestedView==='cargo')await renderCargo(); else if(requestedView==='inventory')await renderInventory(); else if(requestedView==='routes')await window.PolarOpsFeatures.renderRoutes(); else if(requestedView==='science')await window.PolarOpsFeatures.renderScience(); else if(requestedView==='comms')await window.PolarOpsFeatures.renderComms(); else if(requestedView==='readiness')await window.PolarOpsFeatures.renderReadiness(); else if(requestedView==='assets')await renderAssets(); else if(requestedView==='vehicles')await renderVehicles(); else if(requestedView==='emergency')await renderEmergency(); else if(requestedView==='environment')await renderEnvironment(); else if(requestedView==='network')await renderNetwork(); else if(requestedView==='alerts')await window.PolarOpsFeatures.renderAlerts(); else if(requestedView==='activity')await window.PolarOpsFeatures.renderAudit(); else if(requestedView==='settings')await renderSettings();
+      }catch(e){ if(state.view===requestedView){v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger')} }
     }finally{
       state.renderInProgress=false;
+      if(state.renderQueued||state.view!==requestedView){state.renderQueued=false;setTimeout(()=>renderView(),0)}
     }
   }
 
