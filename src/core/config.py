@@ -16,3 +16,10 @@ def env_value(env, name: str, default: str = "") -> str:
         return str(value)
     except Exception:
         return default
+
+
+def required_env_value(env, name: str) -> str:
+    value = env_value(env, name).strip()
+    if not value:
+        raise RuntimeError(f"Required environment binding {name} is not configured")
+    return value

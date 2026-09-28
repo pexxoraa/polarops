@@ -4,24 +4,27 @@ import ast
 import base64
 import hashlib
 import pathlib
-import re
 import sqlite3
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-# Python syntax
-ast.parse((ROOT / "src/worker.py").read_text())
+# Python syntax across the modular backend.
+python_files = sorted((ROOT / "src").rglob("*.py"))
+for path in python_files:
+    ast.parse(path.read_text(), filename=str(path))
 
-# D1 SQL is SQLite-compatible enough to validate locally.
+# Apply every numbered migration to an isolated in-memory SQLite database.
 con = sqlite3.connect(":memory:")
-con.executescript((ROOT / "migrations/0001_initial.sql").read_text())
-con.executescript((ROOT / "migrations/0002_seed_demo.sql").read_text())
-assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 3
-assert con.execute("SELECT COUNT(*) FROM expeditions").fetchone()[0] == 1
-assert con.execute("SELECT COUNT(*) FROM personnel").fetchone()[0] == 6
-assert con.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0] == 5
+for migration in sorted((ROOT / "migrations").glob("*.sql")):
+    con.executescript(migration.read_text())
 
-# Verify seeded password hashes.
+assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] >= 3
+assert con.execute("SELECT COUNT(*) FROM expeditions").fetchone()[0] >= 2
+assert con.execute("SELECT COUNT(*) FROM personnel").fetchone()[0] >= 6
+assert con.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0] >= 5
+assert con.execute("SELECT COUNT(*) FROM research_station_reference").fetchone()[0] == 82
+
+# Verify bundled demo password hashes after all migrations.
 def verify(password: str, encoded: str) -> bool:
     algo, rounds, salt_b64, digest_b64 = encoded.split("$", 3)
     assert algo == "pbkdf2_sha256"
@@ -30,23 +33,24 @@ def verify(password: str, encoded: str) -> bool:
     actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(rounds))
     return actual == expected
 
-rows = con.execute("SELECT email,password_hash FROM users ORDER BY id").fetchall()
-assert verify("PolarOps123!", rows[0][1])
-assert verify("Logistics123!", rows[1][1])
-assert verify("Field123!", rows[2][1])
+rows = dict(con.execute("SELECT email,password_hash FROM users").fetchall())
+assert verify("PolarOps123!", rows["commander@polarops.local"])
+assert verify("Logistics123!", rows["logistics@polarops.local"])
+assert verify("Field123!", rows["field@polarops.local"])
 
-# Basic route coverage for frontend API calls.
+# Basic route coverage: routes may now live in modular router files, not worker.py.
 js = (ROOT / "public/static/app.js").read_text()
-worker = (ROOT / "src/worker.py").read_text()
+backend_source = "\n".join(path.read_text() for path in python_files)
 required = [
     "/api/auth/login", "/api/me", "/api/expeditions", "/api/dashboard",
     "/api/locations", "/api/personnel", "/api/cargo", "/api/inventory",
     "/api/vehicles", "/api/assets", "/api/incidents", "/api/activity",
     "/api/data-sources", "/api/public/facilities", "/api/backup",
     "/api/telemetry/position", "/api/integrations/workers/status",
+    "/api/environment/overview",
 ]
 for route in required:
     assert route in js, f"frontend missing {route}"
-    assert route in worker, f"worker missing {route}"
+    assert route in backend_source, f"backend missing {route}"
 
 print("POLAROPS_CLOUDFLARE_OFFLINE_CHECKS_PASS")

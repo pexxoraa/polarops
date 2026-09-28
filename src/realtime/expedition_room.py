@@ -4,7 +4,7 @@ import uuid
 from js import WebSocketPair
 from workers import DurableObject, Response
 
-from core.config import env_value
+from core.config import required_env_value
 from core.security import decode_token
 from core.time import utcnow
 
@@ -43,7 +43,7 @@ class ExpeditionRoom(DurableObject):
             try:
                 payload = decode_token(
                     str(data.get("token") or ""),
-                    env_value(self.env, "AUTH_SECRET", "dev-only-change-me"),
+                    required_env_value(self.env, "AUTH_SECRET"),
                 )
                 new_attachment = f"auth:{payload['uid']}:{payload['oid']}:{payload['role']}"
                 self.sessions.pop(attachment, None)

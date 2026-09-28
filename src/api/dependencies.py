@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, Request
 
-from core.config import env_value
+from core.config import required_env_value
 from core.permissions import has_permission
 from core.security import decode_token
 from database.d1 import q_first
@@ -13,7 +13,7 @@ async def current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Authentication required")
 
     env = request.scope["env"]
-    secret = env_value(env, "AUTH_SECRET", "dev-only-change-me")
+    secret = required_env_value(env, "AUTH_SECRET")
     payload = decode_token(auth[7:], secret)
     user = await q_first(
         env,
