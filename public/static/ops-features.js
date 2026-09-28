@@ -46,7 +46,8 @@
   async function renderRoutes(){
     const {state,api,$,esc,toast,setHeader,n,numOrNull,formVal,bindPanelMapFullscreen,roleCan}=C();setHeader('Routes & Geofences','Click-to-plan traverses, field zones and weather-aware route cues.');
     const expedition=state.expeditions.find(e=>Number(e.id)===Number(state.expeditionId));
-    const north=String(expedition?.region||'').toLowerCase().includes('arctic');
+    const region=String(expedition?.region||'').toLowerCase();
+    const north=!(region.includes('antarctic')||region.includes('south'))&&(region.includes('arctic')||region.includes('north'));
     const stationRequest=north
       ? api('/api/public/arctic-research-stations').catch(()=>({items:[]}))
       : api('/api/public/facilities?limit=1000').catch(()=>({items:[]}));
