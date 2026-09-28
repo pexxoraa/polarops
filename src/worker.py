@@ -138,10 +138,11 @@ async def cache_put_json(env, cache_key: str, payload: dict):
 
 def polar_region(expedition: dict, locations: list[dict]) -> str:
     region = str(expedition.get("region") or "").lower()
-    if "arctic" in region or "north" in region:
-        return "north"
+    # Check Antarctic first: the word "antarctic" contains "arctic".
     if "antarctic" in region or "south" in region:
         return "south"
+    if "arctic" in region or "north" in region:
+        return "north"
     for loc in locations:
         try:
             lat = float(loc.get("latitude"))
