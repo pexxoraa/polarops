@@ -46,9 +46,23 @@
   }
   function fastCacheSet(path,data){ if(fastCacheable(path))state.memoryCache.set(path,{ts:Date.now(),data}); }
   function clearFastCache(){ state.memoryCache.clear(); }
+  function cleanErrorDetail(value,fallback='Request failed'){
+    if(value==null)return fallback;
+    let candidate=typeof value==='string'?value:(value?.detail||value?.message||value?.error?.message||'');
+    if(Array.isArray(candidate))candidate=candidate.map(x=>x?.msg||x?.message||'').filter(Boolean).join('; ');
+    if(candidate&&typeof candidate==='object')candidate=candidate.message||candidate.detail||'';
+    let text=String(candidate||'').trim();
+    if(!text)return fallback;
+    if(/<!doctype|<html|<head|<body|<script|<style/i.test(text))return fallback;
+    text=text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+    if(!text)return fallback;
+    return text.length>180?`${text.slice(0,177)}…`:text;
+  }
   function toast(title,detail='',kind='good',ms=2800){
     const root=$('#toastRoot'); if(!root)return;
-    const el=document.createElement('div'); el.className=`toast ${kind}`; el.innerHTML=`<strong>${esc(title)}</strong>${detail?`<span>${esc(detail)}</span>`:''}`;
+    const safeTitle=cleanErrorDetail(title,'Notice');
+    const safeDetail=detail?cleanErrorDetail(detail,''): '';
+    const el=document.createElement('div'); el.className=`toast ${kind}`; el.innerHTML=`<strong>${esc(safeTitle)}</strong>${safeDetail?`<span>${esc(safeDetail)}</span>`:''}`;
     root.appendChild(el); setTimeout(()=>el.remove(),ms);
   }
 
@@ -66,9 +80,12 @@
     try{
       const res=await fetch(path,fetchOpts);
       if(res.status===401 && path!='/api/auth/login'){ logout(false); throw new Error('Your session expired. Please sign in again.'); }
-      let data=null; const ct=res.headers.get('content-type')||'';
-      if(ct.includes('application/json')) data=await res.json(); else data=await res.text();
-      if(!res.ok) throw new Error(data?.detail || data || `Request failed (${res.status})`);
+      let data=null; const ct=res.headers.get('content-type')||'',isJson=ct.includes('application/json');
+      if(isJson){try{data=await res.json()}catch{data=null}}else data=await res.text();
+      if(!res.ok){
+        const fallback=res.status>=500?`Service temporarily unavailable (${res.status})`:`Request failed (${res.status})`;
+        throw new Error(cleanErrorDetail(data,fallback));
+      }
       state.online=true;
       if(method==='GET'){setCache(path,data);fastCacheSet(path,data)}
       else clearFastCache();
@@ -748,7 +765,22 @@
     const vehicle=items.find(v=>v.code==='V03'&&v.status.toLowerCase()==='operational')||items.find(v=>v.status.toLowerCase()==='operational'&&Number.isFinite(Number(v.latitude))&&Number.isFinite(Number(v.longitude)));
     if(!vehicle||!Number.isFinite(Number(vehicle.latitude))||!Number.isFinite(Number(vehicle.longitude))){toast('Simulation unavailable','Add coordinates to an operational vehicle location first.','danger');return}
     state.vehicleSimId=vehicle.id;state.vehicleSimStep=0;state.vehicleSimBase={lat:+vehicle.latitude,lon:+vehicle.longitude,fuel:+vehicle.fuel_percent};
-    const tick=async()=>{state.vehicleSimStep++;const q=state.vehicleSimStep,base=state.vehicleSimBase;const lat=base.lat+0.012*Math.sin(q*.38),lon=base.lon+0.020*Math.cos(q*.34),fuel=Math.max(8,base.fuel-q*.18),speed=18+7*Math.abs(Math.sin(q*.5)),heading=(q*23)%360;try{await api('/api/telemetry/position',{method:'POST',body:JSON.stringify({expedition_id:state.expeditionId,entity_type:'vehicle',entity_id:vehicle.id,latitude:lat,longitude:lon,accuracy_m:4.5,speed_kph:speed,heading,fuel_percent:fuel,source:'demo-simulator',recorded_at:new Date().toISOString()})})}catch(err){if(navigator.onLine)toast('Simulator update failed',err.message,'danger')}};
+    const tick=async()=>{
+      if(!navigator.onLine){
+        stopVehicleSimulation(false);
+        toast('Vehicle simulator paused','Connection lost. Restart simulation when online.','warn',4200);
+        return;
+      }
+      state.vehicleSimStep++;
+      const q=state.vehicleSimStep,base=state.vehicleSimBase;
+      const lat=base.lat+0.012*Math.sin(q*.38),lon=base.lon+0.020*Math.cos(q*.34),fuel=Math.max(8,base.fuel-q*.18),speed=18+7*Math.abs(Math.sin(q*.5)),heading=(q*23)%360;
+      try{
+        await api('/api/telemetry/position',{method:'POST',body:JSON.stringify({expedition_id:state.expeditionId,entity_type:'vehicle',entity_id:vehicle.id,latitude:lat,longitude:lon,accuracy_m:4.5,speed_kph:speed,heading,fuel_percent:fuel,source:'demo-simulator',recorded_at:new Date().toISOString()})});
+      }catch(err){
+        stopVehicleSimulation(false);
+        toast('Vehicle simulator paused',cleanErrorDetail(err?.message,'Temporary service problem.'),'warn',4200);
+      }
+    };
     tick();state.vehicleSimTimer=setInterval(tick,3000);toast('Live vehicle feed started',`${vehicle.code} publishes GPS every 3 seconds.`,'good',4200);renderVehicles();
   }
   function openVehicleForm(v,locs){ modal(v?'Update vehicle':'Add vehicle',v?`${v.code} · ${v.name}`:'Register a transport or response vehicle.',`<form id="vehicleForm"><div class="form-grid">${!v?`<div class="field"><label>Code</label><input name="code" required placeholder="V05"></div>`:''}<div class="field"><label>Name</label><input name="name" required value="${esc(v?.name||'')}"></div><div class="field"><label>Type</label><input name="type" value="${esc(v?.type||'Ground')}"></div><div class="field"><label>Location</label><select name="location_id">${locationOptions(locs,v?.location_id)}</select></div><div class="field"><label>Status</label><select name="status">${['Operational','Maintenance','Unavailable','Deployed'].map(x=>`<option ${v?.status===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Fuel %</label><input type="number" min="0" max="100" step="1" name="fuel_percent" value="${n(v?.fuel_percent??100)}"></div><div class="field"><label>Range km</label><input type="number" min="0" step="any" name="range_km" value="${n(v?.range_km??0)}"></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">${v?'Save vehicle':'Add vehicle'}</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#vehicleForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={name:formVal(f,'name'),type:formVal(f,'type'),location_id:numOrNull(formVal(f,'location_id')),status:formVal(f,'status'),fuel_percent:Number(formVal(f,'fuel_percent')),range_km:Number(formVal(f,'range_km'))};try{if(v)await api(`/api/vehicles/${v.id}`,{method:'PATCH',body:JSON.stringify(p)});else await api('/api/vehicles',{method:'POST',body:JSON.stringify({expedition_id:state.expeditionId,code:formVal(f,'code').trim().toUpperCase(),...p})});closeModal();toast(v?'Vehicle updated':'Vehicle added');renderVehicles()}catch(err){toast('Vehicle save failed',err.message,'danger')}}; }
