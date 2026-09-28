@@ -47,7 +47,7 @@ required = [
     "/api/vehicles", "/api/assets", "/api/incidents", "/api/activity",
     "/api/data-sources", "/api/public/facilities", "/api/backup",
     "/api/telemetry/position", "/api/integrations/workers/status",
-    "/api/environment/overview",
+    "/api/environment/overview", "/api/public/arctic-research-stations",
 ]
 for route in required:
     assert route in js, f"frontend missing {route}"

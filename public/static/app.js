@@ -321,16 +321,22 @@
   async function renderOverview(){
     const selectedExp=state.expeditions.find(e=>e.id===state.expeditionId);
     const selectedPole=poleForRegion(selectedExp?.region);
-    const [d,facilityResponse]=await Promise.all([
+    const [d,facilityResponse,arcticResponse]=await Promise.all([
       api(`/api/dashboard?expedition_id=${state.expeditionId}`),
       selectedPole==='south'
         ? api('/api/public/facilities?limit=1000').catch(()=>({items:[]}))
-        : Promise.resolve({items:[]})
+        : Promise.resolve({items:[]}),
+      selectedPole==='north'
+        ? api('/api/public/arctic-research-stations').catch(()=>({items:[],summary:{}}))
+        : Promise.resolve({items:[],summary:{}})
     ]);
     const s=d.stats;
     const publicFacilities=(facilityResponse.items||[]).filter(f=>f.geographic_scope==='antarctic_treaty_area');
     const researchBases=publicFacilities.filter(f=>f.facility_type==='Station');
     const supportFacilities=publicFacilities.filter(f=>f.facility_type!=='Station');
+    const arcticStations=arcticResponse.items||[];
+    const arcticVerified=arcticStations.filter(f=>String(f.verification_status||'').startsWith('verified_')&&Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude>=55);
+    const arcticReference=arcticStations.filter(f=>!String(f.verification_status||'').startsWith('verified_')&&Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude>=55);
     setHeader(`${d.expedition.name} — Command Dashboard`, `${d.expedition.start_date||'—'} – ${d.expedition.end_date||'—'}  |  ${d.expedition.region}`);
     const riskScore=Math.min(100,d.risks.reduce((a,r)=>a+(r.severity==='high'?28:14),0));
     const pole=poleForRegion(d.expedition.region), regionName=pole==='north'?'ARCTIC / NORTH POLAR OPERATIONS':'ANTARCTIC / SOUTH POLAR OPERATIONS';
@@ -349,10 +355,10 @@
         ${stat('Active incidents',s.active_incidents,s.active_incidents?'Response required':'No active incidents','△',s.active_incidents?'danger':'good')}
       </div>
       <div class="grid-2">
-        <div class="panel">
-          <div class="panel-head"><div><h2>Expedition Map</h2><p>${pole==='south'?'Live mission operations plus verified COMNAP Antarctic research bases.':'Live mission locations, personnel and response vehicles.'}</p></div><div class="panel-actions"><span class="badge info"><i class="dot"></i>LIVE</span>${pole==='south'?`<span class="badge violet">${researchBases.length} RESEARCH BASES</span>`:''}</div></div>
+        <div class="panel dashboard-map-panel" id="dashboardMapPanel">
+          <div class="panel-head"><div><h2>Expedition Map</h2><p>${pole==='south'?'Live mission operations plus verified COMNAP Antarctic research bases.':`Live mission operations plus ${arcticVerified.length} mapped, independently verified Arctic research sites.`}</p></div><div class="panel-actions"><span class="badge info"><i class="dot"></i>LIVE</span>${pole==='south'?`<span class="badge violet">${researchBases.length} RESEARCH BASES</span>`:`<span class="badge violet">${arcticVerified.length} VERIFIED SITES</span>`}<button class="button ghost small map-fullscreen-btn" id="mapFullscreen" type="button" title="Open map fullscreen">⛶ Fullscreen</button></div></div>
           <div id="liveMissionMap" class="live-mission-map" role="application" aria-label="Live expedition map"></div>
-          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>${pole==='south'?`COMNAP Nov 2024 · ${researchBases.length} research bases · ${supportFacilities.length} other Treaty-area facilities`:'Basemaps: Esri Satellite · Esri Topographic'}</span></div>
+          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>${pole==='south'?`COMNAP Nov 2024 · ${researchBases.length} research bases · ${supportFacilities.length} other Treaty-area facilities`:`Arctic reference · ${arcticVerified.length} verified mapped · ${arcticReference.length} reference-only mapped`}</span></div>
         </div>
         <div class="dashboard-side">
           <div class="panel">
@@ -366,14 +372,15 @@
         </div>
       </div>`;
     $$('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
-    initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition,publicFacilities);
+    initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition,publicFacilities,arcticStations);
+    bindMapFullscreen();
   }
 
   function polarMarker(kind,label){
     const glyph=kind==='vehicle'?'▣':kind==='person'?'●':kind==='camp'?'▲':'⌂';
     return L.divIcon({className:'polar-leaflet-icon',html:`<span class="pm ${kind}">${glyph}</span><em>${esc(label)}</em>`,iconSize:[120,34],iconAnchor:[17,17]});
   }
-  function initLiveMissionMap(locations,vehicles,personnel,expedition,publicFacilities=[]){
+  function initLiveMissionMap(locations,vehicles,personnel,expedition,publicFacilities=[],arcticStations=[]){
     const el=$('#liveMissionMap');
     if(!el||!window.L)return;
     destroyLiveMap();
@@ -382,6 +389,8 @@
     const peoplePoints=personnel.filter(p=>Number.isFinite(Number(p.live_latitude))&&Number.isFinite(Number(p.live_longitude)));
     const researchBases=publicFacilities.filter(f=>f.facility_type==='Station'&&Number.isFinite(Number(f.latitude))&&Number.isFinite(Number(f.longitude)));
     const supportFacilities=publicFacilities.filter(f=>f.facility_type!=='Station'&&Number.isFinite(Number(f.latitude))&&Number.isFinite(Number(f.longitude)));
+    const arcticVerified=arcticStations.filter(f=>String(f.verification_status||'').startsWith('verified_')&&Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude>=55);
+    const arcticReference=arcticStations.filter(f=>!String(f.verification_status||'').startsWith('verified_')&&Number.isFinite(+f.latitude)&&Number.isFinite(+f.longitude)&&+f.latitude>=55);
     const missionCoords=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
     const pole=poleForRegion(expedition?.region);
     const fallback=pole==='north'?[78.7,15]:[-75,40];
@@ -395,11 +404,16 @@
     const missionLayer=L.layerGroup().addTo(state.liveMap);
     const researchLayer=L.layerGroup();
     const supportLayer=L.layerGroup();
+    const arcticVerifiedLayer=L.layerGroup();
+    const arcticReferenceLayer=L.layerGroup();
     satellite.addTo(state.liveMap);
     if(pole==='south'&&researchBases.length)researchLayer.addTo(state.liveMap);
+    if(pole==='north'&&arcticVerified.length)arcticVerifiedLayer.addTo(state.liveMap);
     const overlays={'Mission operations':missionLayer};
     if(pole==='south'&&researchBases.length)overlays[`Research bases (${researchBases.length})`]=researchLayer;
     if(pole==='south'&&supportFacilities.length)overlays[`Other facilities (${supportFacilities.length})`]=supportLayer;
+    if(pole==='north'&&arcticVerified.length)overlays[`Verified research sites (${arcticVerified.length})`]=arcticVerifiedLayer;
+    if(pole==='north'&&arcticReference.length)overlays[`Reference-only sites (${arcticReference.length})`]=arcticReferenceLayer;
     L.control.layers({'Satellite':satellite,'Topographic':topo},overlays,{position:'topright',collapsed:false}).addTo(state.liveMap);
     const base=fixed.find(x=>/base|station|hub/i.test(`${x.name} ${x.type}`))||fixed[0];
     if(base){
@@ -438,13 +452,82 @@
           .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">COMNAP ${esc(String(f.facility_type||'FACILITY').toUpperCase())}</span><strong>${esc(f.name)}</strong><br>${esc(f.country||f.programme||'Antarctic programme')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small></div>`);
       });
     }
+    if(pole==='north'){
+      arcticVerified.forEach(f=>{
+        L.circleMarker([+f.latitude,+f.longitude],{radius:5,weight:1.5,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88})
+          .addTo(arcticVerifiedLayer)
+          .bindTooltip(esc(f.name),{direction:'top',sticky:true,opacity:.95})
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED ARCTIC RESEARCH SITE</span><strong>${esc(f.name)}</strong><br>${esc(f.location||'Location not supplied')}<br>${esc(f.operating_country||'Operator/country not supplied')}<br><small>${esc(f.verification_source||'Current verification source')}</small><br><small>${n(f.latitude,5)}, ${n(f.longitude,5)} · ${esc(f.coordinate_precision||'reference coordinates')}</small>${f.verification_url?`<br><a href="${esc(f.verification_url)}" target="_blank" rel="noopener">Verification proof ↗</a>`:''}</div>`);
+      });
+      arcticReference.forEach(f=>{
+        L.circleMarker([+f.latitude,+f.longitude],{radius:4,weight:1.2,color:'#7d8994',fillColor:'#a8b1b8',fillOpacity:.72})
+          .addTo(arcticReferenceLayer)
+          .bindTooltip(`${esc(f.name)} · reference only`,{direction:'top',sticky:true,opacity:.95})
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">REFERENCE — NOT VERIFIED CURRENT</span><strong>${esc(f.name)}</strong><br>${esc(f.location||'Location not supplied')}<br>${esc(f.operating_country||'Country not supplied')}<br><small>${esc(f.verification_note||'Reference data only')}</small><br><small>${n(f.latitude,5)}, ${n(f.longitude,5)} · ${esc(f.coordinate_precision||'reference coordinates')}</small></div>`);
+      });
+    }
+    addMissionMapLegend(state.liveMap,pole,{
+      research: pole==='south'?researchBases.length:arcticVerified.length,
+      support: pole==='south'?supportFacilities.length:0,
+      reference: pole==='north'?arcticReference.length:0
+    });
     const overviewCoords=pole==='south'&&researchBases.length
       ? [...missionCoords,...researchBases.map(f=>[+f.latitude,+f.longitude])]
-      : missionCoords;
+      : pole==='north'&&arcticVerified.length
+        ? [...missionCoords,...arcticVerified.map(f=>[+f.latitude,+f.longitude])]
+        : missionCoords;
     if(overviewCoords.length===1)state.liveMap.setView(overviewCoords[0],7);
-    else if(overviewCoords.length>1)state.liveMap.fitBounds(L.latLngBounds(overviewCoords).pad(.08),{maxZoom:pole==='south'?4:7,animate:false});
+    else if(overviewCoords.length>1)state.liveMap.fitBounds(L.latLngBounds(overviewCoords).pad(.08),{maxZoom:pole==='south'?4:pole==='north'?4:7,animate:false});
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
   }
+
+  function addMissionMapLegend(map,pole,counts={}){
+    if(!map||!window.L)return;
+    const control=L.control({position:'bottomleft'});
+    control.onAdd=()=>{
+      const div=L.DomUtil.create('div','mission-map-legend');
+      div.innerHTML=`<strong>Map legend</strong>
+        <span><i class="legend-symbol location">⌂</i>Mission base / location</span>
+        <span><i class="legend-symbol vehicle">▣</i>Vehicle / mobile asset</span>
+        <span><i class="legend-symbol person">●</i>Personnel live GPS</span>
+        ${counts.research?`<span><i class="legend-dot research"></i>${pole==='south'?'COMNAP research base':'Verified research site'}</span>`:''}
+        ${pole==='south'&&counts.research?'<span><i class="legend-dot closed"></i>Temporarily closed base</span>':''}
+        ${counts.support?'<span><i class="legend-dot support"></i>Other public facility</span>':''}
+        ${counts.reference?'<span><i class="legend-dot reference"></i>Reference only — not verified current</span>':''}`;
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    control.addTo(map);
+  }
+
+  function bindPanelMapFullscreen(panelId,buttonId){
+    const panel=$('#'+panelId),button=$('#'+buttonId);
+    if(!panel||!button)return;
+    const refresh=()=>{
+      const active=document.fullscreenElement===panel||panel.classList.contains('map-panel-fullscreen');
+      button.textContent=active?'⛶ Exit fullscreen':'⛶ Fullscreen';
+      button.title=active?'Exit fullscreen map':'Open map fullscreen';
+      setTimeout(()=>state.liveMap?.invalidateSize(),80);
+    };
+    button.onclick=async()=>{
+      try{
+        if(document.fullscreenEnabled&&panel.requestFullscreen){
+          if(document.fullscreenElement===panel)await document.exitFullscreen();
+          else await panel.requestFullscreen();
+        }else{
+          panel.classList.toggle('map-panel-fullscreen');
+          document.body.classList.toggle('map-fullscreen-open',panel.classList.contains('map-panel-fullscreen'));
+          refresh();
+        }
+      }catch{
+        panel.classList.toggle('map-panel-fullscreen');
+        document.body.classList.toggle('map-fullscreen-open',panel.classList.contains('map-panel-fullscreen'));
+        refresh();
+      }
+    };
+    document.onfullscreenchange=refresh;
+  }
+  function bindMapFullscreen(){bindPanelMapFullscreen('dashboardMapPanel','mapFullscreen')}
 
   function stat(label,value,detail,ico,kind=''){return `<div class="stat ${kind}"><div class="stat-head"><span class="stat-label">${label}</span><span class="stat-icon">${ico}</span></div><div class="stat-value">${value}</div><div class="stat-detail">${esc(detail)}</div></div>`}
   function activityRow(a){return `<div class="activity-item"><div class="activity-icon">${({personnel:'◎',cargo:'▣',inventory:'▤',vehicle:'▱',incident:'△',asset:'◇',location:'⌖'})[a.category]||'•'}</div><div><strong>${esc(a.message)}</strong><span>${a.user_name?`By ${esc(a.user_name)}`:'System event'}</span></div><time>${fmtTime(a.created_at)}</time></div>`}
@@ -671,40 +754,94 @@
     if(refresh)refresh.onclick=()=>renderEnvironment(true);
   }
 
-  async function renderArcticNetwork(){
-    setHeader('Arctic Research Network','Current mission locations plus public Arctic research and observing networks.');
-    const [locs,env]=await Promise.all([
-      loadLocations(),
-      api(`/api/environment/overview?expedition_id=${state.expeditionId}`)
-    ]);
-    const resources=env.resources||[];
-    $('#view').innerHTML=`
-      <div class="source-strip network-source-strip">
-        <div><span>Mission locations</span><strong>${locs.length}</strong></div>
-        <div><span>Research catalogue</span><strong>INTERACT</strong></div>
-        <div><span>Observing networks</span><strong>SAON</strong></div>
-        <div><span>Ice operations</span><strong>BAS ILP</strong></div>
-        <div class="source-note"><strong>ARCTIC / NORTH</strong><span>Public research catalogues remain separate from your private personnel and vehicle telemetry.</span></div>
-      </div>
-      <section class="panel network-map-panel"><div class="panel-head"><div><h2>Arctic Mission Map</h2><p>Mapped locations belonging to the current expedition. These are operator-controlled mission records, not a public station census.</p></div><span class="badge info">${locs.length} locations</span></div><div id="arcticMissionMap" class="facility-network-map"></div><div class="live-map-note"><span>● Mission-controlled coordinates</span><span>Esri Topographic / Satellite</span></div></section>
-      <section class="panel"><div class="panel-head"><div><h2>Arctic science & observing resources</h2><p>Current public portals for research-station datasets, observing networks, sea ice and satellite context.</p></div></div><div class="resource-grid">${resources.map(x=>`<a class="resource-card" href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.category)}</span><strong>${esc(x.name)}</strong><p>${esc(x.detail)}</p><small>${esc(x.update)}</small></a>`).join('')}</div></section>
-      <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>PolarOps does not invent or scrape private Arctic personnel locations.</p></div></div><div class="data-boundary-grid"><div><strong>Mission operations</strong><span>Your roster, vehicle GPS, cargo, inventory and incident data remain organization-controlled.</span></div><div><strong>Public science</strong><span>INTERACT and SAON provide research/observing discovery; product freshness varies by station and dataset.</span></div><div><strong>Environmental context</strong><span>Use the Environment page for current weather, daily sea ice, space weather and polar seismic events.</span></div></div></section>`;
-    initArcticMissionMap(locs);
+  function arcticVerificationBadge(r){
+    const status=String(r.verification_status||'');
+    if(status==='verified_current')return badge('Verified current','good');
+    if(status==='verified_component')return badge('Current component','info');
+    if(status==='current_network_addition')return badge('Current addition','good');
+    return badge('Reference only','warn');
   }
 
-  function initArcticMissionMap(locs){
+  function arcticCoordinateBadge(r){
+    const p=String(r.coordinate_precision||'');
+    if(p==='official_facility')return badge('Official coordinates','good');
+    if(p==='station_page')return badge('Station reference','info');
+    if(p==='location_reference')return badge('Approx. location','warn');
+    return badge('Unmapped','warn');
+  }
+
+  async function renderArcticNetwork(){
+    setHeader('Arctic Research Network','Verified current research infrastructure separated from reference-only station records.');
+    const [locs,env,network]=await Promise.all([
+      loadLocations(),
+      api(`/api/environment/overview?expedition_id=${state.expeditionId}`),
+      api('/api/public/arctic-research-stations')
+    ]);
+    const resources=env.resources||[];
+    const summary=network.summary||{};
+    const referenceItems=network.reference_items||[];
+    const additions=network.current_additions||[];
+    const mappedVerified=(network.items||[]).filter(r=>String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
+    const mappedReference=referenceItems.filter(r=>!String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
+    $('#view').innerHTML=`
+      <div class="source-strip network-source-strip">
+        <div><span>Supplied reference rows</span><strong>${summary.user_reference_rows??referenceItems.length}</strong></div>
+        <div><span>Independently verified</span><strong>${summary.verified_reference_rows??'—'}</strong></div>
+        <div><span>Current additions found</span><strong>${summary.current_network_additions??additions.length}</strong></div>
+        <div><span>Mapped reference rows</span><strong>${summary.mapped_rows??'—'}</strong></div>
+        <div class="source-note"><strong>ARCTIC / NORTH</strong><span>Population values are reference values, not live occupancy. Verified-current labels require a named current research-network or operator source.</span></div>
+      </div>
+      <section class="panel network-map-panel dashboard-map-panel" id="arcticNetworkPanel">
+        <div class="panel-head"><div><h2>Arctic Research Stations Map</h2><p>Verified current stations are enabled by default. Reference-only records are a separate optional layer.</p></div><div class="panel-actions"><span class="badge violet">${mappedVerified.length} VERIFIED MAPPED</span><button class="button ghost small" id="arcticNetworkFullscreen" type="button">⛶ Fullscreen</button></div></div>
+        <div id="arcticMissionMap" class="facility-network-map arctic-research-map"></div>
+        <div class="live-map-note"><span>● Mission coordinates remain private/operator-controlled</span><span>${mappedVerified.length} verified mapped · ${mappedReference.length} reference-only mapped</span></div>
+      </section>
+      <section class="panel" style="margin-top:13px">
+        <div class="panel-head"><div><h2>Verification sources</h2><p>Proof links used to distinguish current research infrastructure from reference-only records.</p></div></div>
+        <div class="resource-grid">${(network.sources||[]).map(x=>`<a class="resource-card" href="${esc(x.url)}" target="_blank" rel="noopener"><span>VERIFICATION SOURCE</span><strong>${esc(x.name)}</strong><p>${esc(x.role)}</p><small>Open source ↗</small></a>`).join('')}</div>
+        <div class="environment-disclaimer" style="margin-top:10px"><strong>Verification rule:</strong> ${esc(network.warning||'Reference rows are not assumed to be currently operational.')}</div>
+      </section>
+      <section class="panel" style="margin-top:13px">
+        <div class="panel-head"><div><h2>Your Arctic station reference — checked</h2><p>All ${referenceItems.length} supplied rows are retained. Verified/current status is shown separately from the supplied name, establishment year and reference population.</p></div></div>
+        <div class="table-wrap arctic-reference-table"><table><thead><tr><th>Station</th><th>Location</th><th>Operating country</th><th>Established</th><th>Reference population</th><th>Verification</th><th>Map precision</th></tr></thead><tbody>
+          ${referenceItems.map(r=>`<tr><td><strong>${esc(r.name)}</strong><small>${esc(r.verification_note||'')}</small></td><td>${esc(r.location||'—')}</td><td>${esc(r.operating_country||'—')}</td><td>${esc(r.established||'—')}</td><td><strong>${esc(r.summer_population||'—')}</strong><small>summer · winter ${esc(r.winter_population||'—')}</small></td><td>${arcticVerificationBadge(r)}${r.verification_url?`<small><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a></small>`:''}</td><td>${arcticCoordinateBadge(r)}</td></tr>`).join('')}
+        </tbody></table></div>
+      </section>
+      <section class="panel current-additions-panel" style="margin-top:13px">
+        <div class="panel-head"><div><h2>Current network additions absent from your supplied table</h2><p>These are current INTERACT or Ny-Ålesund network entries that were not represented as distinct rows in your 58-station reference list.</p></div><span class="badge good">${additions.length} CURRENT ADDITIONS</span></div>
+        <div class="table-wrap"><table><thead><tr><th>Station / infrastructure</th><th>Current network location</th><th>Verification source</th><th>Map status</th></tr></thead><tbody>
+          ${additions.map(r=>`<tr><td><strong>${esc(r.name)}</strong></td><td>${esc(r.location||'—')}</td><td><strong>${esc(r.verification_source||'Current network')}</strong><small><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a></small></td><td>${arcticCoordinateBadge(r)}</td></tr>`).join('')}
+        </tbody></table></div>
+      </section>
+      <section class="panel" style="margin-top:13px"><div class="panel-head"><div><h2>Arctic science & observing resources</h2><p>Public portals for research datasets, observing networks, sea ice and satellite context.</p></div></div><div class="resource-grid">${resources.map(x=>`<a class="resource-card" href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.category)}</span><strong>${esc(x.name)}</strong><p>${esc(x.detail)}</p><small>${esc(x.update)}</small></a>`).join('')}</div></section>
+      <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>Reference infrastructure is never treated as private live operations.</p></div></div><div class="data-boundary-grid"><div><strong>Mission operations</strong><span>Your roster, vehicle GPS, cargo, inventory and incident data remain organization-controlled.</span></div><div><strong>Research infrastructure</strong><span>INTERACT and official operator sources verify current research infrastructure. The supplied table remains separately attributable reference data.</span></div><div><strong>Occupancy</strong><span>Summer/winter population numbers from the supplied table are not live personnel counts and are never displayed as such.</span></div></div></section>`;
+    initArcticMissionMap(locs,network.items||[]);
+    bindPanelMapFullscreen('arcticNetworkPanel','arcticNetworkFullscreen');
+  }
+
+  function initArcticMissionMap(locs,stations=[]){
     const el=$('#arcticMissionMap');
     if(!el||!window.L)return;
     destroyLiveMap();
-    const points=locs.filter(l=>Number.isFinite(+l.latitude)&&Number.isFinite(+l.longitude)&&+l.latitude>=50);
-    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([74,15],3);
+    const mission=locs.filter(l=>Number.isFinite(+l.latitude)&&Number.isFinite(+l.longitude)&&+l.latitude>=50);
+    const verified=stations.filter(r=>String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
+    const reference=stations.filter(r=>!String(r.verification_status||'').startsWith('verified_')&&Number.isFinite(+r.latitude)&&Number.isFinite(+r.longitude)&&+r.latitude>=55);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false,zoomAnimation:false,fadeAnimation:false,markerZoomAnimation:false}).setView([72,0],3);
     const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
     const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    const missionLayer=L.layerGroup().addTo(state.liveMap);
+    const verifiedLayer=L.layerGroup().addTo(state.liveMap);
+    const referenceLayer=L.layerGroup();
     topo.addTo(state.liveMap);
-    L.control.layers({'Topographic':topo,'Satellite':satellite},null,{position:'topright',collapsed:true}).addTo(state.liveMap);
-    points.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(state.liveMap).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
-    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(l=>[+l.latitude,+l.longitude])).pad(.15),{maxZoom:7,animate:false});
-    else if(points.length===1)state.liveMap.setView([+points[0].latitude,+points[0].longitude],6);
+    L.control.layers({'Topographic':topo,'Satellite':satellite},{'Mission locations':missionLayer,[`Verified current research (${verified.length})`]:verifiedLayer,[`Reference only (${reference.length})`]:referenceLayer},{position:'topright',collapsed:false}).addTo(state.liveMap);
+    mission.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(missionLayer).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
+    verified.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:5,weight:1.4,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88}).addTo(verifiedLayer).bindTooltip(esc(r.name),{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED CURRENT</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br>${esc(r.operating_country||'')}<br><small>${esc(r.verification_source||'')}</small>${r.verification_url?`<br><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a>`:''}</div>`));
+    reference.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:4,weight:1.1,color:'#7d8994',fillColor:'#a8b1b8',fillOpacity:.70}).addTo(referenceLayer).bindTooltip(`${esc(r.name)} · reference only`,{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">REFERENCE ONLY</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br><small>${esc(r.verification_note||'Not independently verified current.')}</small></div>`));
+    const legend=L.control({position:'bottomleft'});
+    legend.onAdd=()=>{const d=L.DomUtil.create('div','mission-map-legend');d.innerHTML='<strong>Map legend</strong><span><i class="legend-dot mission"></i>Mission location</span><span><i class="legend-dot research"></i>Verified current research</span><span><i class="legend-dot reference"></i>Reference only</span>';L.DomEvent.disableClickPropagation(d);return d};legend.addTo(state.liveMap);
+    const bounds=[...mission.map(x=>[+x.latitude,+x.longitude]),...verified.map(x=>[+x.latitude,+x.longitude])];
+    if(bounds.length>1)state.liveMap.fitBounds(L.latLngBounds(bounds).pad(.10),{maxZoom:4,animate:false});
+    else if(bounds.length===1)state.liveMap.setView(bounds[0],6);
     setTimeout(()=>state.liveMap?.invalidateSize(),60);
   }
 

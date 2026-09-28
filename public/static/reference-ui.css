@@ -178,3 +178,22 @@ body[data-pole="north"] .polar-switch button[data-pole="north"].active{backgroun
 
 /* Dashboard public research-base overlays */
 .public-facility-popup .popup-kicker{display:block;margin-bottom:4px;font-size:7px;letter-spacing:.65px;font-weight:850;color:#6b46ce}.public-facility-popup strong{display:block;font-size:11px;color:#17364e;margin-bottom:2px}.live-mission-map .leaflet-control-layers-overlays label{font-weight:650}.live-mission-map .leaflet-control-layers-overlays label:nth-child(2){color:#6b46ce}.live-mission-map .leaflet-control-layers-overlays label:nth-child(3){color:#0f7e9f}
+
+
+/* Map legend + fullscreen */
+.mission-map-legend{min-width:178px;padding:8px 9px;border:1px solid #cadbe7;border-radius:7px;background:rgba(255,255,255,.96);box-shadow:0 5px 18px rgba(25,61,88,.16);font-size:8px;line-height:1.35;color:#355269;backdrop-filter:blur(5px)}
+.mission-map-legend>strong{display:block;margin-bottom:5px;font-size:8px;text-transform:uppercase;letter-spacing:.55px;color:#193b55}
+.mission-map-legend span{display:flex;align-items:center;gap:6px;margin:4px 0;white-space:nowrap}
+.legend-symbol{width:17px;height:17px;border-radius:50%;display:inline-grid;place-items:center;color:#fff;font-style:normal;font-size:8px;font-weight:800}
+.legend-symbol.location{background:#1479da}.legend-symbol.vehicle{background:#12a366}.legend-symbol.person{background:#7b4de0}
+.legend-dot{display:inline-block;width:10px;height:10px;border:2px solid rgba(255,255,255,.9);border-radius:50%;box-shadow:0 0 0 1px rgba(42,65,82,.25)}
+.legend-dot.research{background:#8a63df}.legend-dot.closed{background:#f0a52a}.legend-dot.support{background:#25a9c7}.legend-dot.reference{background:#a8b1b8}.legend-dot.mission{background:#0ca8c1}
+.dashboard-map-panel:fullscreen,.network-map-panel:fullscreen{box-sizing:border-box;width:100vw;height:100vh;max-width:none;margin:0;padding:14px;background:#eef5fb;border-radius:0;display:flex;flex-direction:column}
+.dashboard-map-panel:fullscreen .live-mission-map,.network-map-panel:fullscreen .facility-network-map{flex:1;height:auto;min-height:0}
+.dashboard-map-panel.map-panel-fullscreen,.network-map-panel.map-panel-fullscreen{position:fixed!important;inset:0!important;z-index:9998!important;margin:0!important;border-radius:0!important;padding:14px!important;background:#eef5fb!important;display:flex!important;flex-direction:column!important}
+.dashboard-map-panel.map-panel-fullscreen .live-mission-map,.network-map-panel.map-panel-fullscreen .facility-network-map{flex:1!important;height:auto!important;min-height:0!important}
+body.map-fullscreen-open{overflow:hidden}
+.map-fullscreen-btn{white-space:nowrap}
+.arctic-reference-table{max-height:620px;overflow:auto}.arctic-reference-table td small{display:block;margin-top:3px;line-height:1.35;color:#72899b}.arctic-reference-table a{color:#0876d5;text-decoration:none;font-weight:700}.arctic-reference-table a:hover{text-decoration:underline}
+.arctic-research-map{height:470px}
+@media(max-width:760px){.mission-map-legend{min-width:150px;font-size:7px}.dashboard-map-panel:fullscreen,.network-map-panel:fullscreen,.dashboard-map-panel.map-panel-fullscreen,.network-map-panel.map-panel-fullscreen{padding:8px!important}.arctic-research-map{height:360px}}
