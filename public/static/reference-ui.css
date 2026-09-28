@@ -294,3 +294,149 @@ body.map-fullscreen-open{overflow:hidden}
 }
 .route-weather-cue p{font-size:8px;line-height:1.45}
 .route-weather-cue small{font-size:7.5px;line-height:1.4}
+
+/* Responsive typography normalization — readable across desktop, tablet and mobile */
+:root{
+  --type-xs:clamp(10.5px,.66vw,11.5px);
+  --type-sm:clamp(11.5px,.74vw,12.5px);
+  --type-md:clamp(12.5px,.82vw,14px);
+  --type-lg:clamp(14px,.95vw,16px);
+  --type-xl:clamp(19px,1.45vw,25px);
+}
+body{font-size:var(--type-md);line-height:1.45}
+button,input,select,textarea{font-size:var(--type-md)}
+.eyebrow{font-size:var(--type-xs)}
+.sidebar .brand-lockup strong{font-size:18px}
+.sidebar .brand-lockup span{font-size:10px}
+.mission-card small{font-size:10.5px}
+.mission-card strong{font-size:13px}
+.mission-card span{font-size:11px}
+.nav button{font-size:12.5px;min-height:42px}
+.sync-box strong{font-size:10.5px}
+.sync-box span{font-size:10px}
+.avatar{font-size:10.5px}
+.user-chip strong{font-size:11.5px}
+.user-chip span{font-size:10px}
+.topbar h1{font-size:var(--type-xl)}
+.page-subtitle{font-size:12px}
+.expedition-select,.sos-btn,.realtime-pill{font-size:11.5px}
+.stat-label{font-size:10.5px}
+.stat-value{font-size:23px}
+.stat-detail{font-size:11px}
+.panel-head h2{font-size:16px}
+.panel-head p{font-size:11.5px;line-height:1.45}
+.button{font-size:12px}
+.button.small{font-size:11px}
+.search,.filter{font-size:12px}
+table{font-size:12px}
+th{font-size:10.5px;line-height:1.35}
+td{font-size:12px;line-height:1.4}
+td small{font-size:10.5px}
+.badge{font-size:10.5px}
+.icon-btn{font-size:10.5px}
+.empty{font-size:12px}
+.empty strong{font-size:14px}
+.risk-item strong,.activity-item strong{font-size:12px}
+.risk-item span,.activity-item span{font-size:10.5px}
+.activity-item time{font-size:10px}
+.risk-summary p{font-size:11px}
+.risk-summary strong{font-size:13px}
+.item-card h3{font-size:14px}
+.item-card .code{font-size:10.5px}
+.item-card p{font-size:11.5px}
+.metric-big small{font-size:10.5px}
+.incident-title small{font-size:10.5px}
+.incident-kpi span{font-size:10.5px}
+.recommendation strong{font-size:12px}
+.recommendation p{font-size:11px}
+.timeline-event time{font-size:10px}
+.timeline-event p{font-size:11px}
+.sos-empty p{font-size:12px}
+.modal-head h2{font-size:20px}
+.modal-head p{font-size:11.5px}
+.field label{font-size:11px}
+.field input,.field select,.field textarea{font-size:13.5px}
+.toast,.toast strong{font-size:12px}
+.toast span{font-size:10.5px}
+.settings-section h3{font-size:15px}
+.settings-section>p{font-size:11px}
+.info-row{font-size:11.5px}
+.source-strip .source-note span{font-size:11px}
+.notice-card strong{font-size:12.5px}
+.notice-card p{font-size:11px}
+.weather-grid span{font-size:10.5px}
+.weather-grid strong{font-size:19px}
+.data-boundary-grid strong{font-size:12px}
+.data-boundary-grid span{font-size:11px}
+.login-card>p{font-size:13px}
+.login-help>strong{font-size:11px}
+.demo-account div strong{font-size:12px}
+.demo-account div span,.demo-account button,.security-note{font-size:10.5px!important}
+.login-copy p{font-size:14px}
+.capability-strip span{font-size:11px}
+.region-kicker{font-size:10px}
+.region-banner strong{font-size:21px}
+.region-banner small{font-size:11px}
+.region-source{font-size:9.5px}
+.live-map-note{font-size:10px}
+.leaflet-control-layers{font-size:11px}
+.polar-leaflet-icon em{font-size:10.5px}
+.leaflet-popup-content,.facility-network-map .leaflet-popup-content{font-size:11.5px}
+.science-hero p{font-size:12px}
+.env-stat span{font-size:10.5px}
+.env-stat small{font-size:10.5px}
+.feed-caption{font-size:10.5px}
+.resource-card span{font-size:10px}
+.resource-card strong{font-size:12.5px}
+.resource-card p{font-size:11px}
+.resource-card small{font-size:10px}
+.environment-disclaimer{font-size:11px}
+.compact-table table{font-size:11px}
+.reference-source-note{font-size:10.5px}
+.verification-summary span{font-size:10px}
+.public-facility-popup .popup-kicker{font-size:10px}
+.public-facility-popup strong{font-size:12.5px}
+.mission-map-legend,.mission-map-legend>strong{font-size:10.5px}
+.legend-symbol{font-size:10px}
+.ops-command-hero h2,.readiness-hero h2{font-size:18px}
+.ops-command-hero p,.readiness-hero p{font-size:11.5px}
+.timeline-task strong,.handover-card strong,.alert-card strong,.incident-action strong,.readiness-item strong,.zone-item strong{font-size:12px}
+.timeline-task span,.handover-card span,.alert-card small,.incident-action span,.readiness-item small,.zone-item span{font-size:10.5px}
+.timeline-task small,.handover-card small{font-size:10.5px}
+.timeline-time{font-size:10.5px}
+.offline-pack-card p,.offline-pack-card small{font-size:11px}
+.sitrep-report pre{font-size:12px}
+.route-weather-cue strong{font-size:11px}
+.route-weather-cue p,.route-weather-cue small{font-size:10.5px}
+.alert-severity{font-size:10px}
+.alert-copy p{font-size:11px}
+.science-record-card>span{font-size:10px}
+.science-record-card p{font-size:11px}
+.science-record-card small{font-size:10.5px}
+.readiness-item>div>span{font-size:10px}
+.global-search-result span{font-size:10px}
+.global-search-result strong{font-size:12.5px}
+.global-search-result small{font-size:10.5px}
+.popup-profile-btn{font-size:10.5px}
+
+@media(max-width:980px){
+  .topbar h1{font-size:22px}
+  .page-subtitle{font-size:11.5px}
+  .nav button{font-size:12px}
+}
+@media(max-width:760px){
+  :root{
+    --type-xs:11px;
+    --type-sm:12px;
+    --type-md:13px;
+    --type-lg:15px;
+    --type-xl:21px;
+  }
+  .topbar h1{font-size:21px}
+  .panel-head h2{font-size:15px}
+  table{font-size:11.5px}
+  th{font-size:10px}
+  td{font-size:11.5px}
+  .button{font-size:11.5px}
+  .mission-map-legend{font-size:10px}
+}
