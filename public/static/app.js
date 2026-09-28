@@ -256,7 +256,7 @@
           <button data-pole="north" class="${poleForRegion(exp.region)==='north'?'active':''}"><span>▲</span><b>ARCTIC</b><small>NORTH</small></button>
         </div>
         <div class="mission-card"><small>ACTIVE MISSION</small><strong id="missionName">${esc(exp.name)}</strong><span id="missionRegion">${esc(exp.region)}</span></div>
-        <nav class="nav">${navItems.map(([id,ico,label])=>`<button data-view="${id}" class="${id===state.view?'active':''}"><span class="ico">${ico}</span><span>${label}</span></button>`).join('')}</nav>
+        <nav class="nav">${navItems.map(([id,ico,label])=>`<button data-view="${id}" class="${id===state.view?'active':''}"><span class="ico">${ico}</span><span>${id==='network'?(poleForRegion(exp.region)==='north'?'Arctic Research':'Antarctic Network'):label}</span></button>`).join('')}</nav>
         <div class="sidebar-bottom"><div class="sync-box"><i class="sync-dot"></i><div><strong id="syncLabel">SYNC ONLINE</strong><span id="syncDetail">Central database connected</span></div></div>
           <div class="user-chip"><div class="avatar">${esc(initials(state.user.name))}</div><div><strong>${esc(state.user.name)}</strong><span>${esc(state.user.role)}</span></div><button class="logout-btn" title="Sign out">↪</button></div>
         </div>
@@ -600,7 +600,45 @@
     if(refresh)refresh.onclick=()=>renderEnvironment(true);
   }
 
+  async function renderArcticNetwork(){
+    setHeader('Arctic Research Network','Current mission locations plus public Arctic research and observing networks.');
+    const [locs,env]=await Promise.all([
+      loadLocations(),
+      api(`/api/environment/overview?expedition_id=${state.expeditionId}`)
+    ]);
+    const resources=env.resources||[];
+    $('#view').innerHTML=`
+      <div class="source-strip network-source-strip">
+        <div><span>Mission locations</span><strong>${locs.length}</strong></div>
+        <div><span>Research catalogue</span><strong>INTERACT</strong></div>
+        <div><span>Observing networks</span><strong>SAON</strong></div>
+        <div><span>Ice operations</span><strong>BAS ILP</strong></div>
+        <div class="source-note"><strong>ARCTIC / NORTH</strong><span>Public research catalogues remain separate from your private personnel and vehicle telemetry.</span></div>
+      </div>
+      <section class="panel network-map-panel"><div class="panel-head"><div><h2>Arctic Mission Map</h2><p>Mapped locations belonging to the current expedition. These are operator-controlled mission records, not a public station census.</p></div><span class="badge info">${locs.length} locations</span></div><div id="arcticMissionMap" class="facility-network-map"></div><div class="live-map-note"><span>● Mission-controlled coordinates</span><span>Esri Topographic / Satellite</span></div></section>
+      <section class="panel"><div class="panel-head"><div><h2>Arctic science & observing resources</h2><p>Current public portals for research-station datasets, observing networks, sea ice and satellite context.</p></div></div><div class="resource-grid">${resources.map(x=>`<a class="resource-card" href="${esc(x.url)}" target="_blank" rel="noopener"><span>${esc(x.category)}</span><strong>${esc(x.name)}</strong><p>${esc(x.detail)}</p><small>${esc(x.update)}</small></a>`).join('')}</div></section>
+      <section class="panel source-disclaimer" style="margin-top:13px"><div class="panel-head"><div><h2>Data boundaries</h2><p>PolarOps does not invent or scrape private Arctic personnel locations.</p></div></div><div class="data-boundary-grid"><div><strong>Mission operations</strong><span>Your roster, vehicle GPS, cargo, inventory and incident data remain organization-controlled.</span></div><div><strong>Public science</strong><span>INTERACT and SAON provide research/observing discovery; product freshness varies by station and dataset.</span></div><div><strong>Environmental context</strong><span>Use the Environment page for current weather, daily sea ice, space weather and polar seismic events.</span></div></div></section>`;
+    initArcticMissionMap(locs);
+  }
+
+  function initArcticMissionMap(locs){
+    const el=$('#arcticMissionMap');
+    if(!el||!window.L)return;
+    destroyLiveMap();
+    const points=locs.filter(l=>Number.isFinite(+l.latitude)&&Number.isFinite(+l.longitude)&&+l.latitude>=50);
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,minZoom:2,maxZoom:18,worldCopyJump:false}).setView([74,15],3);
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1});
+    topo.addTo(state.liveMap);
+    L.control.layers({'Topographic':topo,'Satellite':satellite},null,{position:'topright',collapsed:true}).addTo(state.liveMap);
+    points.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(state.liveMap).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
+    if(points.length>1)state.liveMap.fitBounds(L.latLngBounds(points.map(l=>[+l.latitude,+l.longitude])).pad(.15),{maxZoom:7});
+    else if(points.length===1)state.liveMap.setView([+points[0].latitude,+points[0].longitude],6);
+    setTimeout(()=>state.liveMap?.invalidateSize(),60);
+  }
+
   async function renderNetwork(){
+    if(currentPole()==='north'){await renderArcticNetwork();return}
     setHeader('Antarctic Network','Official public facilities reference data, live environmental conditions and mission-base import.');
     const [sources,data]=await Promise.all([
       api('/api/data-sources'),
