@@ -13,7 +13,7 @@
     fallbackTimer:null, deferredRealtime:false,
     gpsWatchId:null, gpsPersonnelId:null, gpsLastSent:0,
     vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null,
-    liveMap:null
+    liveMap:null, liveMarkers:{personnel:new Map(),vehicle:new Map()}
   };
 
   const navItems=[
@@ -114,9 +114,32 @@
   function handleRealtimeEvent(message){
     if(Number(message.expedition_id)!==Number(state.expeditionId))return;
     if(message.type==='incident.created')toast('Live SOS received',message.data?.code||'New incident','danger',4200);
+
+    // Telemetry can arrive every few seconds. Updating the Leaflet marker in
+    // place avoids re-fetching the full dashboard and reloading map tiles.
+    if(message.type==='telemetry.updated' && state.view==='overview' && state.liveMap){
+      if(updateLiveTelemetryMarker(message))return;
+    }
+
     if($('#modalRoot')?.children.length){state.deferredRealtime=true;return}
     clearTimeout(state.realtimeRender);
-    state.realtimeRender=setTimeout(()=>renderView(),250);
+    const delay=message.type?.startsWith('telemetry.')?900:350;
+    state.realtimeRender=setTimeout(()=>renderView(),delay);
+  }
+
+  function updateLiveTelemetryMarker(message){
+    const kind=message.entity_type, id=Number(message.entity_id), data=message.data||{};
+    if(!['personnel','vehicle'].includes(kind)||!Number.isFinite(+data.latitude)||!Number.isFinite(+data.longitude))return false;
+    const marker=state.liveMarkers?.[kind]?.get(id);
+    if(!marker)return false;
+    marker.setLatLng([+data.latitude,+data.longitude]);
+    const when=data.recorded_at?ago(data.recorded_at):'just now';
+    if(kind==='vehicle'){
+      marker.setPopupContent(`<strong>Vehicle telemetry</strong><br><b>LIVE GPS</b> · ${when}${data.fuel_percent!=null?`<br>${n(data.fuel_percent)}% fuel`:''}`);
+    }else{
+      marker.setPopupContent(`<strong>Personnel telemetry</strong><br><b>LIVE GPS</b> · ${when}${data.accuracy_m!=null?`<br>Accuracy ±${n(data.accuracy_m)}m`:''}`);
+    }
+    return true;
   }
 
   function startFallbackRefresh(){
@@ -152,6 +175,7 @@
   function applyPolarTheme(){ document.body.dataset.pole=currentPole(); }
   function destroyLiveMap(){
     if(state.liveMap){ try{state.liveMap.remove()}catch{} state.liveMap=null; }
+    state.liveMarkers={personnel:new Map(),vehicle:new Map()};
   }
   async function switchExpedition(id){
     const next=state.expeditions.find(e=>e.id===Number(id)); if(!next)return;
@@ -272,7 +296,7 @@
         <div class="panel">
           <div class="panel-head"><div><h2>Expedition Map</h2><p>Live mission locations, personnel and response vehicles.</p></div><span class="badge info"><i class="dot"></i>LIVE</span></div>
           <div id="liveMissionMap" class="live-mission-map" role="application" aria-label="Live expedition map"></div>
-          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>Basemap: OpenStreetMap · Satellite: Esri</span></div>
+          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>Basemaps: Esri Satellite · Esri Topographic</span></div>
         </div>
         <div class="dashboard-side">
           <div class="panel">
@@ -304,10 +328,14 @@
     const pole=poleForRegion(expedition?.region);
     const fallback=pole==='north'?[78.7,15]:[-75,40];
     state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18}).setView(fallback,pole==='north'?4:3);
-    const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'});
-    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri'});
-    street.addTo(state.liveMap);
-    L.control.layers({'Map':street,'Satellite':satellite},null,{position:'topright',collapsed:false}).addTo(state.liveMap);
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+      maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
+    });
+    const topo=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',{
+      maxZoom:18,attribution:'Tiles © Esri',updateWhenIdle:true,keepBuffer:1
+    });
+    satellite.addTo(state.liveMap);
+    L.control.layers({'Satellite':satellite,'Topographic':topo},null,{position:'topright',collapsed:false}).addTo(state.liveMap);
     const base=fixed.find(x=>/base|station|hub/i.test(`${x.name} ${x.type}`))||fixed[0];
     if(base){
       fixed.filter(x=>x.id!==base.id).forEach(x=>L.polyline([[+base.latitude,+base.longitude],[+x.latitude,+x.longitude]],{color:'#0b78e3',weight:2,dashArray:'7 7',opacity:.65}).addTo(state.liveMap));
@@ -317,10 +345,16 @@
       L.marker([+x.latitude,+x.longitude],{icon:polarMarker(kind,x.name)}).addTo(state.liveMap)
         .bindPopup(`<strong>${esc(x.name)}</strong><br>${esc(x.type)}<br><small>${n(x.latitude,5)}, ${n(x.longitude,5)}</small>`);
     });
-    vehiclePoints.forEach(v=>L.marker([+v.latitude,+v.longitude],{icon:polarMarker('vehicle',`${v.code} ${v.telemetry_recorded_at?'LIVE':''}`)}).addTo(state.liveMap)
-      .bindPopup(`<strong>${esc(v.code)} · ${esc(v.name)}</strong><br>${esc(v.status)} · ${n(v.fuel_percent)}% fuel${v.telemetry_recorded_at?`<br><b>LIVE GPS</b> · ${ago(v.telemetry_recorded_at)}`:''}`));
-    peoplePoints.forEach(p=>L.marker([+p.live_latitude,+p.live_longitude],{icon:polarMarker('person',`${p.name} LIVE`)}).addTo(state.liveMap)
-      .bindPopup(`<strong>${esc(p.name)}</strong><br>${esc(p.role)}<br><b>LIVE GPS</b> · ${ago(p.telemetry_recorded_at)}`));
+    vehiclePoints.forEach(v=>{
+      const marker=L.marker([+v.latitude,+v.longitude],{icon:polarMarker('vehicle',`${v.code} ${v.telemetry_recorded_at?'LIVE':''}`)}).addTo(state.liveMap)
+        .bindPopup(`<strong>${esc(v.code)} · ${esc(v.name)}</strong><br>${esc(v.status)} · ${n(v.fuel_percent)}% fuel${v.telemetry_recorded_at?`<br><b>LIVE GPS</b> · ${ago(v.telemetry_recorded_at)}`:''}`);
+      state.liveMarkers.vehicle.set(Number(v.id),marker);
+    });
+    peoplePoints.forEach(p=>{
+      const marker=L.marker([+p.live_latitude,+p.live_longitude],{icon:polarMarker('person',`${p.name} LIVE`)}).addTo(state.liveMap)
+        .bindPopup(`<strong>${esc(p.name)}</strong><br>${esc(p.role)}<br><b>LIVE GPS</b> · ${ago(p.telemetry_recorded_at)}`);
+      state.liveMarkers.personnel.set(Number(p.id),marker);
+    });
     if(all.length===1)state.liveMap.setView(all[0],7);
     else if(all.length>1)state.liveMap.fitBounds(L.latLngBounds(all).pad(.18),{maxZoom:7});
     setTimeout(()=>state.liveMap?.invalidateSize(),50);
