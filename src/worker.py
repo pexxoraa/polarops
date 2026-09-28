@@ -9,15 +9,13 @@ import math
 import re
 import time
 import urllib.parse
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response as FastAPIResponse
 from pydantic import BaseModel, Field
-from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf_fetch
-from js import WebSocketPair
+from workers import Response, WorkerEntrypoint, asgi, fetch as cf_fetch
 
 from core.config import (
     APP_VERSION,
@@ -48,6 +46,8 @@ from database.d1 import (
     q_write_batch,
     to_py,
 )
+from realtime.broadcaster import broadcast
+from realtime.expedition_room import ExpeditionRoom
 
 app = FastAPI(title="PolarOps Cloudflare", version=APP_VERSION)
 
@@ -315,23 +315,6 @@ async def log_activity(env, expedition_id: int, category: str, message: str, use
         "INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
         expedition_id, category, message, user_id, utcnow(),
     )
-
-
-async def broadcast(env, expedition_id: int, event_type: str, entity_type: str, entity_id: int | None = None, data: dict | None = None):
-    try:
-        stub = env.EXPEDITION_ROOM.getByName(str(expedition_id))
-        payload = json.dumps({
-            "type": event_type,
-            "expedition_id": expedition_id,
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "server_time": utcnow(),
-            "data": data or {},
-        }, separators=(",", ":"))
-        await stub.broadcast_json(payload)
-    except Exception:
-        # A failed real-time notification must never roll back the database mutation.
-        pass
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -1673,78 +1656,6 @@ async def frontend(path: str, request: Request):
         resp = await env.ASSETS.fetch("https://assets.local/index.html")
     body = await resp.bytes()
     return FastAPIResponse(content=bytes(body), status_code=int(resp.status), headers=dict(resp.headers))
-
-
-# ----------------------------- Durable Object -----------------------------
-
-class ExpeditionRoom(DurableObject):
-    """One hibernatable WebSocket room per expedition."""
-
-    def __init__(self, ctx, env):
-        super().__init__(ctx, env)
-        self.sessions = {}
-        try:
-            for ws in self.ctx.getWebSockets():
-                attachment = ws.deserializeAttachment()
-                self.sessions[str(attachment or "unauth")] = ws
-        except Exception:
-            pass
-
-    async def fetch(self, request):
-        upgrade = request.headers.get("Upgrade")
-        if not upgrade or str(upgrade).lower() != "websocket":
-            return Response("Expected WebSocket upgrade", status=426)
-        client, server = WebSocketPair.new().object_values()
-        self.ctx.acceptWebSocket(server)
-        sid = "unauth:" + str(uuid.uuid4())
-        server.serializeAttachment(sid)
-        self.sessions[sid] = server
-        return Response(None, status=101, web_socket=client)
-
-    async def webSocketMessage(self, ws, message):
-        try:
-            data = json.loads(str(message))
-        except Exception:
-            return
-        attachment = str(ws.deserializeAttachment() or "")
-        if data.get("type") == "auth":
-            try:
-                payload = decode_token(str(data.get("token") or ""), env_value(self.env, "AUTH_SECRET", "dev-only-change-me"))
-                new_attachment = f"auth:{payload['uid']}:{payload['oid']}:{payload['role']}"
-                self.sessions.pop(attachment, None)
-                ws.serializeAttachment(new_attachment)
-                self.sessions[new_attachment] = ws
-                ws.send(json.dumps({"type": "auth.ok", "expedition_id": int(self.ctx.id.name or 0), "user_id": payload["uid"], "server_time": utcnow()}))
-            except Exception:
-                ws.send(json.dumps({"type": "auth.error", "detail": "Invalid or expired session"}))
-                ws.close(4401, "Unauthorized")
-            return
-        if not attachment.startswith("auth:"):
-            ws.send(json.dumps({"type": "auth.error", "detail": "Authentication required"}))
-            return
-        if data.get("type") == "ping":
-            ws.send(json.dumps({"type": "pong", "server_time": utcnow()}))
-
-    async def webSocketClose(self, ws, code, reason, wasClean):
-        attachment = str(ws.deserializeAttachment() or "")
-        self.sessions.pop(attachment, None)
-        try:
-            ws.close(code, reason)
-        except Exception:
-            pass
-
-    async def broadcast_json(self, payload: str):
-        # Use ctx.getWebSockets() so hibernated/reconstructed objects still reach all clients.
-        sent = 0
-        for ws in self.ctx.getWebSockets():
-            try:
-                attachment = str(ws.deserializeAttachment() or "")
-                if attachment.startswith("auth:"):
-                    ws.send(payload)
-                    sent += 1
-            except Exception:
-                pass
-        return sent
 
 
 # ----------------------------- Worker entrypoint ---------------------------
