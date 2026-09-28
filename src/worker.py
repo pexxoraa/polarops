@@ -22,7 +22,7 @@ from workers import DurableObject, Response, WorkerEntrypoint, asgi, fetch as cf
 from js import Object, TextEncoder, Uint8Array, WebSocketPair, crypto
 from pyodide.ffi import to_js as _to_js
 
-APP_VERSION = "2.0.0-cloudflare"
+APP_VERSION = "2.1.0-cloudflare"
 DEFAULT_COMNAP_URL = "https://www.comnap.aq/s/Facilities_Nov2024.csv"
 DEFAULT_OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 DEFAULT_NSIDC_BASE = "https://noaadata.apps.nsidc.org/NOAA/G02135"
@@ -108,6 +108,17 @@ async def q_batch(env, queries: list[tuple[str, tuple]]) -> list[list[dict]]:
         rows = to_py(result.results)
         output.append(list(rows or []))
     return output
+
+
+async def q_write_batch(env, queries: list[tuple[str, tuple]]):
+    """Execute related D1 statements atomically using D1 batch()."""
+    statements = []
+    for sql, params in queries:
+        stmt = env.DB.prepare(sql)
+        if params:
+            stmt = stmt.bind(*params)
+        statements.append(stmt)
+    return await env.DB.batch(statements)
 
 
 async def cache_get_json(env, cache_key: str, max_age_seconds: int):
@@ -425,6 +436,37 @@ def decode_token(token: str, secret: str) -> dict:
         return payload
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+
+def make_ws_ticket(user: dict, expedition_id: int, secret: str, ttl_seconds: int = 60) -> str:
+    payload = {
+        "uid": int(user["id"]),
+        "oid": int(user["organization_id"]),
+        "eid": int(expedition_id),
+        "exp": int(time.time() + ttl_seconds),
+        "purpose": "expedition_ws",
+    }
+    raw = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    sig = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
+    return raw + "." + base64.urlsafe_b64encode(sig).decode().rstrip("=")
+
+
+def decode_ws_ticket(ticket: str, secret: str) -> dict:
+    try:
+        raw, sig = ticket.split(".", 1)
+        expected = base64.urlsafe_b64encode(
+            hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
+        ).decode().rstrip("=")
+        if not hmac.compare_digest(sig, expected):
+            raise ValueError("bad signature")
+        payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+        if payload.get("purpose") != "expedition_ws":
+            raise ValueError("wrong purpose")
+        if int(payload.get("exp", 0)) < int(time.time()):
+            raise ValueError("expired")
+        return payload
+    except Exception as exc:
+        raise ValueError("Invalid or expired realtime ticket") from exc
 
 
 async def current_user(request: Request) -> dict:
@@ -766,6 +808,18 @@ async def me(user=Depends(current_user)):
     return user
 
 
+@app.get("/api/realtime/ticket")
+async def realtime_ticket(expedition_id: int, request: Request, user=Depends(current_user)):
+    env = request.scope["env"]
+    await ensure_expedition_access(env, user, expedition_id)
+    secret = env_value(env, "AUTH_SECRET", "dev-only-change-me")
+    return {
+        "ticket": make_ws_ticket(user, expedition_id, secret, 60),
+        "expedition_id": expedition_id,
+        "expires_in": 60,
+    }
+
+
 @app.post("/api/me/password")
 async def change_password(data: PasswordChange, request: Request, user=Depends(current_user)):
     env = request.scope["env"]
@@ -787,7 +841,7 @@ async def list_users(request: Request, user=Depends(require("commander"))):
 
 @app.post("/api/users")
 async def add_user(data: UserCreate, request: Request, user=Depends(require("commander"))):
-    if data.role not in ("commander", "logistics", "field", "scientist"):
+    if data.role not in ("commander", "logistics", "field"):
         raise HTTPException(400, "Invalid role")
     env = request.scope["env"]
     try:
@@ -1202,13 +1256,19 @@ async def list_cargo(expedition_id: int, request: Request, user=Depends(current_
 async def add_cargo(data: CargoIn, request: Request, user=Depends(require("commander", "logistics"))):
     env = request.scope["env"]
     await ensure_expedition_access(env, user, data.expedition_id)
+    now = utcnow()
     try:
-        r = await q_write(env, "INSERT INTO cargo(expedition_id,code,name,priority,origin_location_id,destination_location_id,current_location_id,status,quantity,unit,assigned_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", data.expedition_id, data.code, data.name, data.priority, data.origin_location_id, data.destination_location_id, data.current_location_id, data.status, data.quantity, data.unit, data.assigned_to, utcnow())
+        results = await q_write_batch(env, [
+            ("INSERT INTO cargo(expedition_id,code,name,priority,origin_location_id,destination_location_id,current_location_id,status,quantity,unit,assigned_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+             (data.expedition_id, data.code, data.name, data.priority, data.origin_location_id, data.destination_location_id, data.current_location_id, data.status, data.quantity, data.unit, data.assigned_to, now)),
+            ("INSERT INTO cargo_events(cargo_id,location_id,event_type,note,user_id,created_at) SELECT id,?,?,?,?,? FROM cargo WHERE expedition_id=? AND code=?",
+             (data.current_location_id, "Registered", "Cargo registered", user["id"], now, data.expedition_id, data.code)),
+            ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+             (data.expedition_id, "cargo", f"Cargo {data.code} registered: {data.name}", user["id"], now)),
+        ])
     except Exception:
         raise HTTPException(409, "Cargo code already exists")
-    cid = last_row_id(r)
-    await q_write(env, "INSERT INTO cargo_events(cargo_id,location_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?,?)", cid, data.current_location_id, "Registered", "Cargo registered", user["id"], utcnow())
-    await log_activity(env, data.expedition_id, "cargo", f"Cargo {data.code} registered: {data.name}", user["id"])
+    cid = last_row_id(results[0])
     await broadcast(env, data.expedition_id, "cargo.created", "cargo", cid)
     return {"id": cid}
 
@@ -1231,10 +1291,18 @@ async def move_cargo(item_id: int, data: CargoMove, request: Request, user=Depen
     row = await q_first(env, "SELECT expedition_id,code FROM cargo WHERE id=?", item_id)
     if not row: raise HTTPException(404, "Cargo not found")
     await ensure_expedition_access(env, user, row["expedition_id"])
-    await q_write(env, "UPDATE cargo SET current_location_id=?,status=? WHERE id=?", data.location_id, data.status, item_id)
-    await q_write(env, "INSERT INTO cargo_events(cargo_id,location_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?,?)", item_id, data.location_id, data.status, data.note, user["id"], utcnow())
-    loc = await q_first(env, "SELECT name FROM locations WHERE id=?", data.location_id)
-    await log_activity(env, row["expedition_id"], "cargo", f"Cargo {row['code']} moved to {loc['name'] if loc else 'new location'}", user["id"])
+    loc = await q_first(env, "SELECT name,expedition_id FROM locations WHERE id=?", data.location_id)
+    if not loc or int(loc["expedition_id"]) != int(row["expedition_id"]):
+        raise HTTPException(400, "Cargo destination must belong to this expedition")
+    now = utcnow()
+    message = f"Cargo {row['code']} moved to {loc['name']}"
+    await q_write_batch(env, [
+        ("UPDATE cargo SET current_location_id=?,status=? WHERE id=?", (data.location_id, data.status, item_id)),
+        ("INSERT INTO cargo_events(cargo_id,location_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?,?)",
+         (item_id, data.location_id, data.status, data.note, user["id"], now)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (row["expedition_id"], "cargo", message, user["id"], now)),
+    ])
     await broadcast(env, row["expedition_id"], "cargo.moved", "cargo", item_id)
     return {"ok": True}
 
@@ -1289,9 +1357,14 @@ async def adjust_inventory(item_id: int, data: InventoryAdjust, request: Request
     await ensure_expedition_access(env, user, row["expedition_id"])
     new_qty = float(row["quantity"] or 0) + data.delta
     if new_qty < 0: raise HTTPException(400, "Inventory cannot be negative")
-    await q_write(env, "UPDATE inventory_items SET quantity=? WHERE id=?", new_qty, item_id)
-    await q_write(env, "INSERT INTO inventory_events(inventory_id,delta,reason,user_id,created_at) VALUES(?,?,?,?,?)", item_id, data.delta, data.reason, user["id"], utcnow())
-    await log_activity(env, row["expedition_id"], "inventory", f"{row['name']} adjusted by {data.delta:g}: {data.reason}", user["id"])
+    now = utcnow()
+    await q_write_batch(env, [
+        ("UPDATE inventory_items SET quantity=? WHERE id=?", (new_qty, item_id)),
+        ("INSERT INTO inventory_events(inventory_id,delta,reason,user_id,created_at) VALUES(?,?,?,?,?)",
+         (item_id, data.delta, data.reason, user["id"], now)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (row["expedition_id"], "inventory", f"{row['name']} adjusted by {data.delta:g}: {data.reason}", user["id"], now)),
+    ])
     await broadcast(env, row["expedition_id"], "inventory.adjusted", "inventory", item_id, {"quantity": new_qty})
     return {"ok": True, "quantity": new_qty}
 
@@ -1382,10 +1455,16 @@ async def add_incident(data: IncidentIn, request: Request, user=Depends(current_
     await ensure_expedition_access(env, user, data.expedition_id)
     seq = int(await q_value(env, "SELECT COUNT(*) c FROM incidents WHERE expedition_id=?", data.expedition_id) or 0) + 1
     code = f"INC-{seq:03d}"
-    r = await q_write(env, "INSERT INTO incidents(expedition_id,code,title,type,severity,location_id,status,description,affected_count,created_by,created_at) VALUES(?,?,?,?,?,?,'Active',?,?,?,?)", data.expedition_id, code, data.title, data.type, data.severity, data.location_id, data.description, data.affected_count, user["id"], utcnow())
-    iid = last_row_id(r)
-    await q_write(env, "INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)", iid, "SOS", "Incident reported", user["id"], utcnow())
-    await log_activity(env, data.expedition_id, "incident", f"{code} triggered at incident location", user["id"])
+    now = utcnow()
+    results = await q_write_batch(env, [
+        ("INSERT INTO incidents(expedition_id,code,title,type,severity,location_id,status,description,affected_count,created_by,created_at) VALUES(?,?,?,?,?,?,'Active',?,?,?,?)",
+         (data.expedition_id, code, data.title, data.type, data.severity, data.location_id, data.description, data.affected_count, user["id"], now)),
+        ("INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) SELECT id,?,?,?,? FROM incidents WHERE expedition_id=? AND code=?",
+         ("SOS", "Incident reported", user["id"], now, data.expedition_id, code)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (data.expedition_id, "incident", f"{code} triggered at incident location", user["id"], now)),
+    ])
+    iid = last_row_id(results[0])
     await broadcast(env, data.expedition_id, "incident.created", "incident", iid, {"code": code, "severity": data.severity})
     return {"id": iid, "code": code}
 
@@ -1424,10 +1503,15 @@ async def dispatch_incident(item_id: int, request: Request, user=Depends(require
         if d is not None and (best is None or d < best[0]): best = (d, v)
     if not best: raise HTTPException(400, "No operational vehicle with valid coordinates available")
     d, v = best
-    await q_write(env, "UPDATE incidents SET status='Response Dispatched',assigned_vehicle_id=? WHERE id=?", v["id"], item_id)
     note = f"Response vehicle {v['code']} dispatched; estimated straight-line distance {d:.1f} km"
-    await q_write(env, "INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)", item_id, "Dispatch", note, user["id"], utcnow())
-    await log_activity(env, inc["expedition_id"], "incident", f"{inc['code']}: {note}", user["id"])
+    now = utcnow()
+    await q_write_batch(env, [
+        ("UPDATE incidents SET status='Response Dispatched',assigned_vehicle_id=? WHERE id=?", (v["id"], item_id)),
+        ("INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)",
+         (item_id, "Dispatch", note, user["id"], now)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (inc["expedition_id"], "incident", f"{inc['code']}: {note}", user["id"], now)),
+    ])
     await broadcast(env, inc["expedition_id"], "incident.dispatched", "incident", item_id, {"vehicle_code": v["code"], "distance_km": round(d, 1)})
     return {"ok": True, "vehicle_code": v["code"], "distance_km": round(d, 1)}
 
@@ -1438,9 +1522,14 @@ async def resolve_incident(item_id: int, request: Request, user=Depends(require(
     inc = await q_first(env, "SELECT expedition_id,code FROM incidents WHERE id=?", item_id)
     if not inc: raise HTTPException(404, "Incident not found")
     await ensure_expedition_access(env, user, inc["expedition_id"])
-    await q_write(env, "UPDATE incidents SET status='Resolved',resolved_at=? WHERE id=?", utcnow(), item_id)
-    await q_write(env, "INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)", item_id, "Resolved", "Incident resolved; personnel accountability confirmed", user["id"], utcnow())
-    await log_activity(env, inc["expedition_id"], "incident", f"{inc['code']} resolved", user["id"])
+    now = utcnow()
+    await q_write_batch(env, [
+        ("UPDATE incidents SET status='Resolved',resolved_at=? WHERE id=?", (now, item_id)),
+        ("INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)",
+         (item_id, "Resolved", "Incident resolved; personnel accountability confirmed", user["id"], now)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (inc["expedition_id"], "incident", f"{inc['code']} resolved", user["id"], now)),
+    ])
     await broadcast(env, inc["expedition_id"], "incident.resolved", "incident", item_id)
     return {"ok": True}
 
@@ -1451,8 +1540,13 @@ async def add_incident_event(item_id: int, data: IncidentEventIn, request: Reque
     inc = await q_first(env, "SELECT expedition_id,code FROM incidents WHERE id=?", item_id)
     if not inc: raise HTTPException(404, "Incident not found")
     await ensure_expedition_access(env, user, inc["expedition_id"])
-    await q_write(env, "INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)", item_id, data.event_type, data.note, user["id"], utcnow())
-    await log_activity(env, inc["expedition_id"], "incident", f"{inc['code']}: {data.note}", user["id"])
+    now = utcnow()
+    await q_write_batch(env, [
+        ("INSERT INTO incident_events(incident_id,event_type,note,user_id,created_at) VALUES(?,?,?,?,?)",
+         (item_id, data.event_type, data.note, user["id"], now)),
+        ("INSERT INTO activity(expedition_id,category,message,user_id,created_at) VALUES(?,?,?,?,?)",
+         (inc["expedition_id"], "incident", f"{inc['code']}: {data.note}", user["id"], now)),
+    ])
     await broadcast(env, inc["expedition_id"], "incident.event", "incident", item_id, {"event_type": data.event_type})
     return {"ok": True}
 
@@ -1717,16 +1811,29 @@ async def backup(request: Request, user=Depends(require("commander"))):
             payload[table] = await q_all(env, f"SELECT * FROM {table} WHERE expedition_id IN ({placeholders})", *exp_ids)
         else:
             payload[table] = []
+    if exp_ids:
+        placeholders = ",".join("?" for _ in exp_ids)
+        payload["cargo_events"] = await q_all(env, f"SELECT e.* FROM cargo_events e JOIN cargo c ON c.id=e.cargo_id WHERE c.expedition_id IN ({placeholders})", *exp_ids)
+        payload["inventory_events"] = await q_all(env, f"SELECT e.* FROM inventory_events e JOIN inventory_items i ON i.id=e.inventory_id WHERE i.expedition_id IN ({placeholders})", *exp_ids)
+        payload["incident_events"] = await q_all(env, f"SELECT e.* FROM incident_events e JOIN incidents i ON i.id=e.incident_id WHERE i.expedition_id IN ({placeholders})", *exp_ids)
+    else:
+        payload["cargo_events"] = []
+        payload["inventory_events"] = []
+        payload["incident_events"] = []
     payload["public_facilities"] = await q_all(env, "SELECT * FROM public_facilities")
     payload["facility_weather"] = await q_all(env, "SELECT * FROM facility_weather")
     payload["data_sources"] = await q_all(env, "SELECT * FROM data_sources")
     raw = json.dumps(payload, separators=(",", ":"), default=str)
     try:
-        key = f"backups/org-{org_id}/polarops-{datetime.now(timezone.utc).date()}.json"
-        await env.BACKUPS.put(key, raw)
-        payload["r2_backup_key"] = key
-    except Exception:
-        pass
+        backups = getattr(env, "BACKUPS", None)
+        if backups is None:
+            payload["r2_backup"] = {"status": "not_configured"}
+        else:
+            key = f"backups/org-{org_id}/polarops-{datetime.now(timezone.utc).date()}.json"
+            await backups.put(key, raw)
+            payload["r2_backup"] = {"status": "stored", "key": key}
+    except Exception as exc:
+        payload["r2_backup"] = {"status": "error", "detail": type(exc).__name__}
     return payload
 
 
@@ -1836,12 +1943,49 @@ class ExpeditionRoom(DurableObject):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        path = urllib.parse.urlparse(request.url).path
+        parsed = urllib.parse.urlparse(request.url)
+        path = parsed.path
         if path.startswith("/ws/expeditions/"):
             parts = [p for p in path.split("/") if p]
             if len(parts) != 3:
                 return Response("Invalid WebSocket path", status=404)
-            expedition_id = parts[-1]
-            stub = self.env.EXPEDITION_ROOM.getByName(expedition_id)
+            try:
+                expedition_id = int(parts[-1])
+            except Exception:
+                return Response("Invalid expedition", status=404)
+
+            query = urllib.parse.parse_qs(parsed.query)
+            ticket = (query.get("ticket") or [""])[0]
+            try:
+                payload = decode_ws_ticket(
+                    ticket,
+                    env_value(self.env, "AUTH_SECRET", "dev-only-change-me"),
+                )
+            except Exception:
+                return Response("Unauthorized", status=401)
+
+            if int(payload.get("eid", -1)) != expedition_id:
+                return Response("Unauthorized", status=403)
+
+            user = await q_first(
+                self.env,
+                "SELECT id,organization_id,active FROM users WHERE id=?",
+                int(payload.get("uid", -1)),
+            )
+            expedition = await q_first(
+                self.env,
+                "SELECT id,organization_id FROM expeditions WHERE id=?",
+                expedition_id,
+            )
+            if (
+                not user
+                or not user.get("active")
+                or not expedition
+                or int(user["organization_id"]) != int(payload.get("oid", -1))
+                or int(expedition["organization_id"]) != int(payload.get("oid", -1))
+            ):
+                return Response("Unauthorized", status=403)
+
+            stub = self.env.EXPEDITION_ROOM.getByName(str(expedition_id))
             return await stub.fetch(request)
         return await asgi.fetch(app, request, self.env)

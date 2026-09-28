@@ -1,5 +1,5 @@
-const CACHE='polarops-shell-v14-leaflet-stability';
-const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=6','/static/app.js?v=10','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
+const CACHE='polarops-shell-v15-security-offline';
+const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=6','/static/app.js?v=11','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
 
 self.addEventListener('install',e=>e.waitUntil(
   caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())

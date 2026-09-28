@@ -51,7 +51,7 @@
       if(method==='GET'){
         const cached=fromCache(path); if(cached!==undefined){ toast('Offline data shown','Using the latest cached mission snapshot.','warn'); return cached; }
       } else if(!navigator.onLine && path!='/api/auth/login'){
-        const item={id:crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`,path,method,body:opts.body||null,created_at:new Date().toISOString()};
+        const item={id:crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`,path,method,body:opts.body||null,status:'PENDING',attempts:0,created_at:new Date().toISOString()};
         state.pending.push(item); saveQueue(); toast('Action queued for sync','It will be sent when connectivity returns.','warn'); return {queued:true};
       }
       throw err;
@@ -60,13 +60,30 @@
 
   async function flushQueue(){
     if(!navigator.onLine || !state.token || !state.pending.length) return;
-    const queued=[...state.pending], failed=[];
-    for(const q of queued){
-      try{ await fetch(q.path,{method:q.method,headers:{'Content-Type':'application/json','Authorization':`Bearer ${state.token}`},body:q.body}); }
-      catch{ failed.push(q); }
+    const queued=[...state.pending], remaining=[]; let synced=0;
+    for(let i=0;i<queued.length;i++){
+      const q=queued[i];
+      try{
+        q.status='SYNCING';q.attempts=(q.attempts||0)+1;
+        const res=await fetch(q.path,{method:q.method,headers:{'Content-Type':'application/json','Authorization':`Bearer ${state.token}`,'X-PolarOps-Mutation-ID':q.id},body:q.body});
+        if(res.ok){q.status='SYNCED';synced++;continue}
+        let detail='';
+        try{const body=await res.json();detail=body?.detail||body?.error?.message||''}catch{}
+        if(res.status===401){
+          q.status='FAILED';q.last_error=detail||'Authentication expired';
+          remaining.push(q,...queued.slice(i+1));
+          logout(false);break;
+        }
+        if(res.status===409){q.status='CONFLICT';q.last_error=detail||'Conflict requires review';remaining.push(q);continue}
+        if(res.status===429||res.status>=500){q.status='PENDING';q.last_error=detail||`HTTP ${res.status}; retry later`;remaining.push(q);continue}
+        q.status='FAILED';q.last_error=detail||`HTTP ${res.status}`;remaining.push(q);
+      }catch(err){
+        q.status='PENDING';q.last_error=err?.message||'Network failure';remaining.push(q);
+      }
     }
-    state.pending=failed; saveQueue();
-    if(!failed.length && queued.length){ toast('Offline actions synchronized',`${queued.length} queued action${queued.length===1?'':'s'} uploaded.`); renderView(); }
+    state.pending=remaining; saveQueue();
+    if(synced){ toast('Offline actions synchronized',`${synced} queued action${synced===1?'':'s'} uploaded.`); if(state.view!=='overview')renderView(); }
+    if(remaining.some(q=>q.status==='CONFLICT'))toast('Sync conflict','One or more offline actions need review.','warn',4500);
   }
 
   function updateSync(){
@@ -93,13 +110,23 @@
     state.ws=null;state.realtimeStatus=navigator.onLine?'disconnected':'offline';updateRealtimeIndicator();
   }
 
-  function connectRealtime(){
+  async function connectRealtime(){
     if(!state.token||!state.expeditionId||!navigator.onLine)return;
     disconnectRealtime();
     const generation=++state.wsGeneration;
+    state.realtimeStatus='connecting';updateRealtimeIndicator();
+    let ticket;
+    try{
+      const issued=await api(`/api/realtime/ticket?expedition_id=${state.expeditionId}`);
+      ticket=issued.ticket;
+    }catch(err){
+      if(generation===state.wsGeneration){state.realtimeStatus='disconnected';updateRealtimeIndicator();clearTimeout(state.wsReconnect);state.wsReconnect=setTimeout(connectRealtime,5000)}
+      return;
+    }
+    if(generation!==state.wsGeneration||!ticket)return;
     const protocol=location.protocol==='https:'?'wss':'ws';
-    const socket=new WebSocket(`${protocol}://${location.host}/ws/expeditions/${state.expeditionId}`);
-    state.ws=socket;state.realtimeStatus='connecting';updateRealtimeIndicator();
+    const socket=new WebSocket(`${protocol}://${location.host}/ws/expeditions/${state.expeditionId}?ticket=${encodeURIComponent(ticket)}`);
+    state.ws=socket;
     socket.onopen=()=>{ if(generation!==state.wsGeneration)return; socket.send(JSON.stringify({type:'auth',token:state.token})); };
     socket.onmessage=e=>{ if(generation!==state.wsGeneration)return; let msg;try{msg=JSON.parse(e.data)}catch{return}
       if(msg.type==='auth.ok'){state.realtimeStatus='live';updateRealtimeIndicator();clearInterval(state.wsPing);state.wsPing=setInterval(()=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'ping'}))},25000);return}
@@ -766,7 +793,7 @@
     $('#locForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={expedition_id:state.expeditionId,name:formVal(f,'name'),type:formVal(f,'type'),latitude:numOrNull(formVal(f,'latitude')),longitude:numOrNull(formVal(f,'longitude'))};try{if(loc)await api(`/api/locations/${loc.id}`,{method:'PATCH',body:JSON.stringify(p)});else await api('/api/locations',{method:'POST',body:JSON.stringify(p)});closeModal();toast(loc?'Location updated':'Location added',p.name);renderSettings()}catch(err){toast('Location save failed',err.message,'danger')}};
   }
   function openPasswordChange(){ modal('Change password','Use at least eight characters.',`<form id="pwForm"><div class="field"><label>Current password</label><input name="current_password" type="password" required></div><div class="field"><label>New password</label><input name="new_password" type="password" minlength="8" required></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Update password</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#pwForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/me/password',{method:'POST',body:JSON.stringify({current_password:formVal(f,'current_password'),new_password:formVal(f,'new_password')})});closeModal();toast('Password changed')}catch(err){toast('Password change failed',err.message,'danger')}}; }
-  function openUserCreate(){ modal('Create user','Assign the minimum role needed for expedition work.',`<form id="userForm"><div class="form-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Role</label><select name="role"><option value="field">Field</option><option value="scientist">Scientist</option><option value="logistics">Logistics</option><option value="commander">Commander</option></select></div><div class="field"><label>Temporary password</label><input name="password" type="password" minlength="8" required></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Create user</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#userForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/users',{method:'POST',body:JSON.stringify({name:formVal(f,'name'),email:formVal(f,'email'),role:formVal(f,'role'),password:formVal(f,'password')})});closeModal();toast('User created');renderSettings()}catch(err){toast('User creation failed',err.message,'danger')}}; }
+  function openUserCreate(){ modal('Create user','Assign the minimum role needed for expedition work.',`<form id="userForm"><div class="form-grid"><div class="field"><label>Name</label><input name="name" required></div><div class="field"><label>Email</label><input name="email" type="email" required></div><div class="field"><label>Role</label><select name="role"><option value="field">Field</option><option value="logistics">Logistics</option><option value="commander">Commander</option></select></div><div class="field"><label>Temporary password</label><input name="password" type="password" minlength="8" required></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Create user</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#userForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api('/api/users',{method:'POST',body:JSON.stringify({name:formVal(f,'name'),email:formVal(f,'email'),role:formVal(f,'role'),password:formVal(f,'password')})});closeModal();toast('User created');renderSettings()}catch(err){toast('User creation failed',err.message,'danger')}}; }
   async function downloadBackup(){ try{const res=await fetch('/api/backup',{headers:{Authorization:`Bearer ${state.token}`}});if(!res.ok)throw new Error('Backup request failed');const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`polarops-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(url);toast('Backup downloaded')}catch(err){toast('Backup failed',err.message,'danger')} }
 
   async function init(){
