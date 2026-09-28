@@ -39,7 +39,7 @@ assert verify("Logistics123!", rows["logistics@polarops.local"])
 assert verify("Field123!", rows["field@polarops.local"])
 
 # Basic route coverage: routes may now live in modular router files, not worker.py.
-js = (ROOT / "public/static/app.js").read_text()
+js = (ROOT / "public/static/app.js").read_text() + "\n" + (ROOT / "public/static/ops-features.js").read_text()
 backend_source = "\n".join(path.read_text() for path in python_files)
 required = [
     "/api/auth/login", "/api/me", "/api/expeditions", "/api/dashboard",
@@ -48,6 +48,8 @@ required = [
     "/api/data-sources", "/api/public/facilities", "/api/backup",
     "/api/telemetry/position", "/api/integrations/workers/status",
     "/api/environment/overview", "/api/public/arctic-research-stations",
+    "/api/ops/summary", "/api/ops/routes", "/api/ops/alerts", "/api/ops/science",
+    "/api/ops/comms", "/api/ops/readiness", "/api/ops/sitrep", "/api/ops/search", "/api/ops/audit",
 ]
 for route in required:
     assert route in js, f"frontend missing {route}"

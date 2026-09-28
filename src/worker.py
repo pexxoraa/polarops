@@ -367,7 +367,25 @@ async def add_expedition(data: ExpeditionIn, request: Request, user=Depends(requ
         "INSERT INTO expeditions(organization_id,name,region,start_date,end_date,status,description,created_at) VALUES(?,?,?,?,?,?,?,?)",
         user["organization_id"], data.name, data.region, data.start_date, data.end_date, data.status, data.description, utcnow(),
     )
-    return {"id": last_row_id(r)}
+    expedition_id = last_row_id(r)
+    ts = utcnow()
+    defaults = [
+        ("Personnel", "Personnel roster and field-team assignments confirmed", "Expedition Lead"),
+        ("Medical", "Medical kits and evacuation plan checked", "Medical Officer"),
+        ("Communications", "Primary and backup communications tested", "Communications"),
+        ("Vehicles", "Vehicle serviceability and recovery equipment checked", "Logistics"),
+        ("Fuel", "Fuel reserve verified against planned traverse", "Logistics"),
+        ("Food", "Food and field rations checked against team duration", "Logistics"),
+        ("Emergency", "Emergency shelters, beacons and recovery equipment checked", "Expedition Lead"),
+        ("Permits", "Required permits and operating documents reviewed", "Expedition Lead"),
+        ("Weather", "Forecast and operating thresholds reviewed", "Expedition Lead"),
+        ("Route", "Route, alternates and check-in points reviewed", "Field Team Lead"),
+    ]
+    await q_write_batch(env, [(
+        "INSERT INTO readiness_items(expedition_id,category,label,status,owner,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        (expedition_id, category, label, "Pending", owner, ts, ts),
+    ) for category, label, owner in defaults])
+    return {"id": expedition_id}
 
 
 @app.patch("/api/expeditions/{item_id}")
@@ -1063,7 +1081,6 @@ async def activity(expedition_id: int, request: Request, limit: int = 100, user=
 @app.get("/api/backup")
 async def backup(request: Request, user=Depends(require("commander"))):
     env = request.scope["env"]
-    tables = ["organizations", "users", "expeditions", "locations", "personnel", "cargo", "cargo_events", "inventory_items", "inventory_events", "vehicles", "assets", "incidents", "incident_events", "activity", "telemetry_positions", "public_facilities", "facility_weather", "data_sources"]
     payload = {"exported_at": utcnow(), "version": APP_VERSION}
     org_id = user["organization_id"]
     # Global reference tables are exported; operational tables are restricted by tenant.
@@ -1071,7 +1088,7 @@ async def backup(request: Request, user=Depends(require("commander"))):
     payload["users"] = await q_all(env, "SELECT id,organization_id,email,name,role,active,created_at FROM users WHERE organization_id=?", org_id)
     exp_ids = [x["id"] for x in await q_all(env, "SELECT id FROM expeditions WHERE organization_id=?", org_id)]
     payload["expeditions"] = await q_all(env, "SELECT * FROM expeditions WHERE organization_id=?", org_id)
-    for table in ["locations", "personnel", "cargo", "inventory_items", "vehicles", "assets", "incidents", "activity", "telemetry_positions"]:
+    for table in ["locations", "personnel", "cargo", "inventory_items", "vehicles", "assets", "incidents", "activity", "telemetry_positions", "mission_tasks", "planned_routes", "geofences", "ops_alerts", "science_records", "comms_checkins", "readiness_items", "shift_handovers", "audit_events"]:
         if exp_ids:
             placeholders = ",".join("?" for _ in exp_ids)
             payload[table] = await q_all(env, f"SELECT * FROM {table} WHERE expedition_id IN ({placeholders})", *exp_ids)
@@ -1082,13 +1099,17 @@ async def backup(request: Request, user=Depends(require("commander"))):
         payload["cargo_events"] = await q_all(env, f"SELECT e.* FROM cargo_events e JOIN cargo c ON c.id=e.cargo_id WHERE c.expedition_id IN ({placeholders})", *exp_ids)
         payload["inventory_events"] = await q_all(env, f"SELECT e.* FROM inventory_events e JOIN inventory_items i ON i.id=e.inventory_id WHERE i.expedition_id IN ({placeholders})", *exp_ids)
         payload["incident_events"] = await q_all(env, f"SELECT e.* FROM incident_events e JOIN incidents i ON i.id=e.incident_id WHERE i.expedition_id IN ({placeholders})", *exp_ids)
+        payload["incident_actions"] = await q_all(env, f"SELECT a.* FROM incident_actions a JOIN incidents i ON i.id=a.incident_id WHERE i.expedition_id IN ({placeholders})", *exp_ids)
     else:
         payload["cargo_events"] = []
         payload["inventory_events"] = []
         payload["incident_events"] = []
+        payload["incident_actions"] = []
     payload["public_facilities"] = await q_all(env, "SELECT * FROM public_facilities")
     payload["facility_weather"] = await q_all(env, "SELECT * FROM facility_weather")
     payload["data_sources"] = await q_all(env, "SELECT * FROM data_sources")
+    payload["research_station_reference"] = await q_all(env, "SELECT * FROM research_station_reference")
+    payload["arctic_research_stations"] = await q_all(env, "SELECT * FROM arctic_research_stations")
     raw = json.dumps(payload, separators=(",", ":"), default=str)
     try:
         backups = getattr(env, "BACKUPS", None)

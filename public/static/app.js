@@ -17,8 +17,10 @@
   };
 
   const navItems=[
-    ['overview','⌂','Dashboard'],['personnel','◎','Personnel'],['cargo','▣','Cargo'],['inventory','▤','Inventory'],
-    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Incidents'],['environment','◉','Environment'],['network','⌖','Facility Network'],['activity','≡','Activity'],['settings','⚙','Settings']
+    ['overview','⌂','Dashboard'],['operations','◫','Operations'],['personnel','◎','Personnel'],['cargo','▣','Cargo'],['inventory','▤','Inventory'],
+    ['routes','⌁','Routes & Zones'],['science','✧','Science'],['comms','◌','Communications'],['readiness','✓','Readiness'],
+    ['assets','◇','Assets'],['vehicles','▱','Vehicles'],['emergency','△','Incidents'],['environment','◉','Environment'],['network','⌖','Facility Network'],
+    ['alerts','!','Alert Center'],['activity','≡','Audit Trail'],['settings','⚙','Settings']
   ];
 
   function saveQueue(){ localStorage.setItem(queueKey,JSON.stringify(state.pending)); updateSync(); }
@@ -293,14 +295,16 @@
         </div>
       </aside>
       <main class="main"><header class="topbar"><div><span class="eyebrow" id="crumb">POLAR OPERATIONS / ${esc(exp.name)}</span><h1 id="pageTitle">Overview</h1><div id="pageSubtitle" class="page-subtitle">Live expedition status and exceptions.</div></div>
-        <div class="topbar-actions"><span class="realtime-pill connecting" id="realtimePill"><i></i><span id="realtimeLabel">CONNECTING</span></span><select class="expedition-select" id="expeditionSelect">${state.expeditions.map(e=>`<option value="${e.id}" ${e.id===state.expeditionId?'selected':''}>${esc(e.name)}</option>`).join('')}</select><button class="sos-btn" id="globalSOS">⚠ TRIGGER SOS</button></div>
+        <div class="topbar-actions"><button class="button ghost small global-search-btn" id="globalSearchButton" type="button">⌕ Search</button><span class="realtime-pill connecting" id="realtimePill"><i></i><span id="realtimeLabel">CONNECTING</span></span><select class="expedition-select" id="expeditionSelect">${state.expeditions.map(e=>`<option value="${e.id}" ${e.id===state.expeditionId?'selected':''}>${esc(e.name)}</option>`).join('')}</select><button class="sos-btn" id="globalSOS">⚠ TRIGGER SOS</button></div>
       </header><section id="view"></section></main></div>`;
     applyPolarTheme();
     $$('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
     $$('.polar-switch button[data-pole]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();switchPole(b.dataset.pole)}));
     $('.logout-btn').addEventListener('click',()=>logout());
     $('#expeditionSelect').addEventListener('change',e=>switchExpedition(Number(e.target.value)));
-    $('#globalSOS').addEventListener('click',()=>openIncidentCreate()); updateSync();updateRealtimeIndicator();
+    $('#globalSOS').addEventListener('click',()=>openIncidentCreate());
+    $('#globalSearchButton').addEventListener('click',()=>window.PolarOpsFeatures?.openGlobalSearch?.());
+    updateSync();updateRealtimeIndicator();
   }
 
   async function navigate(view){ state.view=view; $$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); await renderView(); }
@@ -312,7 +316,7 @@
       destroyLiveMap();
       const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
       try{
-        if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='environment')await renderEnvironment(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
+        if(state.view==='overview')await renderOverview(); else if(state.view==='operations')await window.PolarOpsFeatures.renderOperations(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='routes')await window.PolarOpsFeatures.renderRoutes(); else if(state.view==='science')await window.PolarOpsFeatures.renderScience(); else if(state.view==='comms')await window.PolarOpsFeatures.renderComms(); else if(state.view==='readiness')await window.PolarOpsFeatures.renderReadiness(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='environment')await renderEnvironment(); else if(state.view==='network')await renderNetwork(); else if(state.view==='alerts')await window.PolarOpsFeatures.renderAlerts(); else if(state.view==='activity')await window.PolarOpsFeatures.renderAudit(); else if(state.view==='settings')await renderSettings();
       }catch(e){ v.innerHTML=`<div class="panel"><div class="empty"><div><strong>Could not load this section</strong>${esc(e.message)}</div></div></div>`;toast('Section load failed',e.message,'danger'); }
     }finally{
       state.renderInProgress=false;
@@ -444,7 +448,7 @@
           fillColor:open?'#8a63df':'#f0a52a',fillOpacity:.88
         }).addTo(researchLayer)
           .bindTooltip(esc(f.name),{direction:'top',sticky:true,opacity:.95})
-          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">COMNAP RESEARCH BASE</span><strong>${esc(f.name)}</strong><br>${esc(f.country||f.programme||'Antarctic programme')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small></div>`);
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">COMNAP RESEARCH BASE</span><strong>${esc(f.name)}</strong><br>${esc(f.country||f.programme||'Antarctic programme')}<br>${esc(f.seasonality||'')} · ${esc(f.status||'Status not supplied')}<br><small>${n(f.latitude,5)}, ${n(f.longitude,5)}</small><br><button class="popup-profile-btn" onclick="window.PolarOpsFeatures.openFacilityProfile('south',${f.id})">Facility profile</button></div>`);
       });
       supportFacilities.forEach(f=>{
         L.circleMarker([+f.latitude,+f.longitude],{
@@ -459,7 +463,7 @@
         L.circleMarker([+f.latitude,+f.longitude],{radius:5,weight:1.5,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88})
           .addTo(arcticVerifiedLayer)
           .bindTooltip(esc(f.name),{direction:'top',sticky:true,opacity:.95})
-          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED ARCTIC RESEARCH SITE</span><strong>${esc(f.name)}</strong><br>${esc(f.location||'Location not supplied')}<br>${esc(f.operating_country||'Operator/country not supplied')}<br><small>${esc(f.verification_source||'Current verification source')}</small><br><small>${n(f.latitude,5)}, ${n(f.longitude,5)} · ${esc(f.coordinate_precision||'reference coordinates')}</small>${f.verification_url?`<br><a href="${esc(f.verification_url)}" target="_blank" rel="noopener">Verification proof ↗</a>`:''}</div>`);
+          .bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED ARCTIC RESEARCH SITE</span><strong>${esc(f.name)}</strong><br>${esc(f.location||'Location not supplied')}<br>${esc(f.operating_country||'Operator/country not supplied')}<br><small>${esc(f.verification_source||'Current verification source')}</small><br><small>${n(f.latitude,5)}, ${n(f.longitude,5)} · ${esc(f.coordinate_precision||'reference coordinates')}</small>${f.verification_url?`<br><a href="${esc(f.verification_url)}" target="_blank" rel="noopener">Verification proof ↗</a>`:''}<br><button class="popup-profile-btn" onclick="window.PolarOpsFeatures.openFacilityProfile('north',${f.id})">Facility profile</button></div>`);
       });
       arcticReference.forEach(f=>{
         L.circleMarker([+f.latitude,+f.longitude],{radius:4,weight:1.2,color:'#7d8994',fillColor:'#a8b1b8',fillOpacity:.72})
@@ -491,7 +495,6 @@
       div.innerHTML=`<button type="button" class="map-data-toggle" aria-expanded="false" title="Map data attribution">⒐ Map data</button>
         <div class="map-data-popover" hidden>
           <strong>Basemap attribution</strong>
-          <span>Powered by Esri. Basemap imagery/topographic data © Esri and contributing data providers.</span>
           <a href="https://support.esri.com/en-us/knowledge-base/what-is-the-correct-way-to-cite-an-arcgis-online-basema-000012040" target="_blank" rel="noopener">Full provider attribution ←</a>
         </div>`;
       const button=div.querySelector('.map-data-toggle');
@@ -710,6 +713,7 @@
     if($('#dispatch'))$('#dispatch').onclick=async()=>{try{const r=await api(`/api/incidents/${i.id}/dispatch`,{method:'POST'});toast('Response dispatched',`${r.vehicle_code} · ${r.distance_km} km`);renderEmergency()}catch(err){toast('Dispatch failed',err.message,'danger')}};
     if($('#resolve'))$('#resolve').onclick=async()=>{if(!confirm(`Resolve ${i.code}?`))return;try{await api(`/api/incidents/${i.id}/resolve`,{method:'POST'});toast('Incident resolved',i.code);renderEmergency()}catch(err){toast('Resolve failed',err.message,'danger')}};
     $('#addEvent').onclick=()=>openIncidentNote(i);
+    window.PolarOpsFeatures?.enhanceIncidentCommand?.(i);
   }
   async function openIncidentCreate(){ const locs=await loadLocations(); modal('Trigger emergency','Create an incident and assemble response context immediately.',`<form id="incidentForm"><div class="form-grid"><div class="field"><label>Incident title</label><input name="title" value="Field Emergency" required></div><div class="field"><label>Type</label><select name="type"><option>Field Emergency</option><option>Medical</option><option>Vehicle</option><option>Weather</option><option>Missing Personnel</option><option>Fire</option></select></div><div class="field"><label>Severity</label><select name="severity"><option>Critical</option><option selected>High</option><option>Medium</option><option>Low</option></select></div><div class="field"><label>Location</label><select name="location_id" required>${locationOptions(locs)}</select></div><div class="field"><label>Personnel affected</label><input type="number" name="affected_count" min="0" value="0"></div><div class="field full"><label>Description</label><textarea name="description" placeholder="What happened and what is known right now?"></textarea></div></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button danger">Trigger incident</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#incidentForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,p={expedition_id:state.expeditionId,title:formVal(f,'title'),type:formVal(f,'type'),severity:formVal(f,'severity'),location_id:Number(formVal(f,'location_id')),description:formVal(f,'description'),affected_count:Number(formVal(f,'affected_count')||0)};if(!p.location_id){toast('Location required','Select the incident location.','danger');return}try{const r=await api('/api/incidents',{method:'POST',body:JSON.stringify(p)});closeModal();state.view='emergency';$$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view==='emergency'));toast('Emergency activated',r.code,'danger');renderEmergency()}catch(err){toast('Incident creation failed',err.message,'danger')}}; }
   function openIncidentNote(i){ modal('Add incident timeline note',i.code,`<form id="eventForm"><div class="field"><label>Event type</label><input name="event_type" value="Update"></div><div class="field"><label>Operational note</label><textarea name="note" required placeholder="Response team reached staging point…"></textarea></div><div class="modal-actions"><button type="button" class="button ghost" data-cancel>Cancel</button><button class="button primary">Add note</button></div></form>`);$('[data-cancel]').onclick=closeModal;$('#eventForm').onsubmit=async e=>{e.preventDefault();const f=e.currentTarget;try{await api(`/api/incidents/${i.id}/events`,{method:'POST',body:JSON.stringify({event_type:formVal(f,'event_type'),note:formVal(f,'note')})});closeModal();toast('Timeline updated');renderEmergency()}catch(err){toast('Update failed',err.message,'danger')}}; }
@@ -864,7 +868,7 @@
     L.control.layers({'Topographic':topo,'Satellite':satellite},{'Mission locations':missionLayer,[`Verified current research (${verified.length})`]:verifiedLayer,[`Reference only (${reference.length})`]:referenceLayer},{position:'topright',collapsed:false}).addTo(state.liveMap);
     addMapDataControl(state.liveMap);
     mission.forEach(l=>L.circleMarker([+l.latitude,+l.longitude],{radius:6,weight:1.5,color:'#087f9d',fillColor:'#0ca8c1',fillOpacity:.88}).addTo(missionLayer).bindPopup(`<strong>${esc(l.name)}</strong><br>${esc(l.type||'Mission location')}<br><small>${n(l.latitude,5)}, ${n(l.longitude,5)}</small>`));
-    verified.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:5,weight:1.4,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88}).addTo(verifiedLayer).bindTooltip(esc(r.name),{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED CURRENT</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br>${esc(r.operating_country||'')}<br><small>${esc(r.verification_source||'')}</small>${r.verification_url?`<br><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a>`:''}</div>`));
+    verified.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:5,weight:1.4,color:'#6b46ce',fillColor:'#8a63df',fillOpacity:.88}).addTo(verifiedLayer).bindTooltip(esc(r.name),{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">VERIFIED CURRENT</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br>${esc(r.operating_country||'')}<br><small>${esc(r.verification_source||'')}</small>${r.verification_url?`<br><a href="${esc(r.verification_url)}" target="_blank" rel="noopener">Proof ↗</a>`:''}<br><button class="popup-profile-btn" onclick="window.PolarOpsFeatures.openFacilityProfile('north',${r.id})">Facility profile</button></div>`));
     reference.forEach(r=>L.circleMarker([+r.latitude,+r.longitude],{radius:4,weight:1.1,color:'#7d8994',fillColor:'#a8b1b8',fillOpacity:.70}).addTo(referenceLayer).bindTooltip(`${esc(r.name)} · reference only`,{direction:'top',sticky:true}).bindPopup(`<div class="public-facility-popup"><span class="popup-kicker">REFERENCE ONLY</span><strong>${esc(r.name)}</strong><br>${esc(r.location||'')}<br><small>${esc(r.verification_note||'Not independently verified current.')}</small></div>`));
     const legend=L.control({position:'bottomleft'});
     legend.onAdd=()=>{const d=L.DomUtil.create('div','mission-map-legend');d.innerHTML='<strong>Map legend</strong><span><i class="legend-dot mission"></i>Mission location</span><span><i class="legend-dot research"></i>Verified current research</span><span><i class="legend-dot reference"></i>Reference only</span>';L.DomEvent.disableClickPropagation(d);return d};legend.addTo(state.liveMap);
@@ -929,6 +933,7 @@
         const shown=facilities.filter(f=>(!country||f.country===country)&&[f.name,f.country,f.programme,f.facility_type,f.status].join(' ').toLowerCase().includes(q));
         $('#facilityRows').innerHTML=shown.map(f=>facilityRow(f)).join('')||'<tr><td colspan="7">No matching facilities.</td></tr>';
         $$('[data-facility-weather]').forEach(b=>b.onclick=()=>openFacilityWeather(facilities.find(x=>x.id===+b.dataset.facilityWeather)));
+        $$('[data-facility-profile]').forEach(b=>b.onclick=()=>window.PolarOpsFeatures.openFacilityProfile('south',+b.dataset.facilityProfile));
         $$('[data-facility-import]').forEach(b=>b.onclick=()=>importFacility(facilities.find(x=>x.id===+b.dataset.facilityImport)));
       };
       $('#facilitySearch').oninput=paint;$('#facilityCountry').onchange=paint;paint();
@@ -968,7 +973,7 @@
 
   function facilityRow(f){
     const weather=f.weather_observed_at?`<strong>${f.temperature_c==null?'—':`${n(f.temperature_c,1)} °C`}</strong><small>${f.wind_speed_kph==null?'':`${n(f.wind_speed_kph,1)} km/h wind · `}${fmtDate(f.weather_observed_at)} UTC</small>`:'<span class="muted">Not loaded</span>';
-    return `<tr><td><strong>${esc(f.name)}</strong><small>${esc(f.status||'Status not supplied')}</small></td><td><strong>${esc(f.country||'—')}</strong><small>${esc(f.programme||'Programme not supplied')}</small></td><td>${badge(f.facility_type||'Facility','info')}</td><td>${esc(f.seasonality||'—')}</td><td class="mono"><strong>${f.latitude==null?'—':n(f.latitude,5)}</strong><small>${f.longitude==null?'—':n(f.longitude,5)}</small></td><td>${weather}</td><td><div class="row-actions"><button class="icon-btn" data-facility-weather="${f.id}">Weather</button>${roleCan('commander','logistics')?`<button class="icon-btn" data-facility-import="${f.id}">Add to mission</button>`:''}</div></td></tr>`;
+    return `<tr><td><strong>${esc(f.name)}</strong><small>${esc(f.status||'Status not supplied')}</small></td><td><strong>${esc(f.country||'—')}</strong><small>${esc(f.programme||'Programme not supplied')}</small></td><td>${badge(f.facility_type||'Facility','info')}</td><td>${esc(f.seasonality||'—')}</td><td class="mono"><strong>${f.latitude==null?'—':n(f.latitude,5)}</strong><small>${f.longitude==null?'—':n(f.longitude,5)}</small></td><td>${weather}</td><td><div class="row-actions"><button class="icon-btn" data-facility-profile="${f.id}">Profile</button><button class="icon-btn" data-facility-weather="${f.id}">Weather</button>${roleCan('commander','logistics')?`<button class="icon-btn" data-facility-import="${f.id}">Add to mission</button>`:''}</div></td></tr>`;
   }
   async function openFacilityWeather(f){
     if(!f)return;
@@ -1036,6 +1041,7 @@
     try{await bootAuthed()}catch{renderLogin()}
   }
 
+  window.PolarOpsCore={state,api,$,$$,esc,toast,modal,closeModal,navigate,setHeader,stat,badge,statusKind,fmtDate,fmtTime,n,numOrNull,formVal,loadLocations,destroyLiveMap,addMapDataControl,bindPanelMapFullscreen,roleCan};
   window.PolarOps={navigate,logout,renderView,connectRealtime,stopPersonnelGps,stopVehicleSimulation};
   init();
 })();
