@@ -127,8 +127,34 @@
   }
 
   function openGlobalSearch(){
-    const {state,api,$,$$,esc,modal,closeModal,navigate}=C();modal('Search PolarOps','Search people, cargo, inventory, vehicles, incidents, tasks, science and polar facilities.',`<div class="field"><label>Search everything</label><input id="globalSearchInput" autocomplete="off" placeholder="Try V02, Meera, oxygen, Himadri, CRG-102…"></div><div id="globalSearchResults" class="global-search-results"><div class="empty"><div><strong>Type at least two characters</strong>Results stay within the authorized mission context where applicable.</div></div></div>`,true);
-    const input=$('#globalSearchInput');let timer=null;input.oninput=()=>{clearTimeout(timer);timer=setTimeout(async()=>{const q=input.value.trim();if(q.length<2){$('#globalSearchResults').innerHTML='<div class="empty">Type at least two characters.</div>';return}try{const r=await api(`/api/ops/search?expedition_id=${state.expeditionId}&q=${encodeURIComponent(q)}`);$('#globalSearchResults').innerHTML=(r.items||[]).map(x=>`<button class="global-search-result" data-kind="${esc(x.kind)}"><span>${esc(x.kind.replace('_',' '))}</span><strong>${esc(x.title||'Untitled')}</strong><small>${esc(x.detail||'')}</small></button>`).join('')||'<div class="empty">No matching records.</div>';$$('.global-search-result').forEach(b=>b.onclick=()=>{const m={personnel:'personnel',cargo:'cargo',inventory:'inventory',vehicle:'vehicles',asset:'assets',location:'settings',incident:'emergency',task:'operations',route:'routes',science:'science',comms:'comms',handover:'operations',facility:'network',arctic_station:'network'};closeModal();navigate(m[b.dataset.kind]||'overview')})}catch(e){$('#globalSearchResults').innerHTML=`<div class="empty">Search failed: ${esc(e.message)}</div>`}},220)};setTimeout(()=>input.focus(),50);
+    const {state,api,$,$$,esc,modal,closeModal,navigate}=C();
+    const expeditionId=state.expeditionId;
+    modal('Search PolarOps','Search people, cargo, inventory, vehicles, incidents, tasks, science and polar facilities.',`<div class="field"><label>Search everything</label><input id="globalSearchInput" autocomplete="off" placeholder="Try V02, Meera, oxygen, Himadri, CRG-102…"></div><div id="globalSearchResults" class="global-search-results"><div class="empty"><div><strong>Type at least two characters</strong>Results stay within the authorized mission context where applicable.</div></div></div>`,true);
+    const input=$('#globalSearchInput');let timer=null,sequence=0;
+    input.oninput=()=>{
+      clearTimeout(timer);
+      const request=++sequence;
+      timer=setTimeout(async()=>{
+        const q=input.value.trim();
+        let target=$('#globalSearchResults');
+        if(!target)return;
+        if(q.length<2){target.innerHTML='<div class="empty">Type at least two characters.</div>';return}
+        target.innerHTML='<div class="empty"><div><strong>Searching PolarOps…</strong>Checking mission records and polar facility references.</div></div>';
+        try{
+          const r=await api(`/api/ops/search?expedition_id=${expeditionId}&q=${encodeURIComponent(q)}`);
+          if(request!==sequence)return;
+          target=$('#globalSearchResults');
+          if(!target)return;
+          target.innerHTML=(r.items||[]).map(x=>`<button class="global-search-result" data-kind="${esc(x.kind)}"><span>${esc(x.kind.replace('_',' '))}</span><strong>${esc(x.title||'Untitled')}</strong><small>${esc(x.detail||'')}</small></button>`).join('')||'<div class="empty">No matching records.</div>';
+          $$('.global-search-result',target).forEach(b=>b.onclick=()=>{const m={personnel:'personnel',cargo:'cargo',inventory:'inventory',vehicle:'vehicles',asset:'assets',location:'settings',incident:'emergency',task:'operations',route:'routes',science:'science',comms:'comms',handover:'operations',facility:'network',arctic_station:'network'};closeModal();navigate(m[b.dataset.kind]||'overview')});
+        }catch(e){
+          if(request!==sequence)return;
+          target=$('#globalSearchResults');
+          if(target)target.innerHTML=`<div class="empty">Search failed: ${esc(e.message)}</div>`;
+        }
+      },220);
+    };
+    setTimeout(()=>{if(document.body.contains(input))input.focus()},50);
   }
 
   async function renderAudit(){

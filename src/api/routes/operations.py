@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from api.dependencies import current_user, ensure_expedition_access, require_permission
-from database.d1 import last_row_id, q_all, q_first, q_value, q_write
+from database.d1 import last_row_id, q_all, q_batch, q_first, q_value, q_write
 from repositories.activity import log_activity
 
 
@@ -571,7 +571,7 @@ async def global_search(request: Request, expedition_id: int, q: str, user=Depen
     term = f"%{q.strip()}%"
     if len(q.strip()) < 2:
         return {"items": []}
-    queries = [
+    specs = [
         ("personnel", "SELECT id,name title,role detail FROM personnel WHERE expedition_id=? AND (name LIKE ? OR role LIKE ?) LIMIT 8"),
         ("cargo", "SELECT id,code title,name detail FROM cargo WHERE expedition_id=? AND (code LIKE ? OR name LIKE ?) LIMIT 8"),
         ("inventory", "SELECT id,name title,sku detail FROM inventory_items WHERE expedition_id=? AND (name LIKE ? OR sku LIKE ?) LIMIT 8"),
@@ -584,14 +584,18 @@ async def global_search(request: Request, expedition_id: int, q: str, user=Depen
         ("science", "SELECT id,title,project detail FROM science_records WHERE expedition_id=? AND (title LIKE ? OR project LIKE ? OR sample_id LIKE ?) LIMIT 8"),
         ("comms", "SELECT id,team_name title,channel detail FROM comms_checkins WHERE expedition_id=? AND (team_name LIKE ? OR channel LIKE ? OR notes LIKE ?) LIMIT 8"),
         ("handover", "SELECT id,shift_name title,summary detail FROM shift_handovers WHERE expedition_id=? AND (shift_name LIKE ? OR summary LIKE ? OR next_tasks LIKE ?) LIMIT 8"),
+        ("facility", "SELECT id,name title,country detail FROM public_facilities WHERE name LIKE ? OR country LIKE ? LIMIT 8"),
+        ("arctic_station", "SELECT id,name title,location detail FROM arctic_research_stations WHERE name LIKE ? OR location LIKE ? LIMIT 8"),
     ]
+    statements = []
+    for _, sql in specs:
+        params = []
+        if "expedition_id=?" in sql:
+            params.append(expedition_id)
+        params.extend([term] * sql.count("LIKE ?"))
+        statements.append((sql, tuple(params)))
+    groups = await q_batch(env, statements)
     items = []
-    for kind, sql in queries:
-        params = [expedition_id] + [term] * (sql.count("LIKE ?"))
-        rows = await q_all(env, sql, *params)
+    for (kind, _), rows in zip(specs, groups):
         items.extend({"kind": kind, **row} for row in rows)
-    facilities = await q_all(env, "SELECT id,name title,country detail FROM public_facilities WHERE name LIKE ? OR country LIKE ? LIMIT 8", term, term)
-    items.extend({"kind": "facility", **row} for row in facilities)
-    arctic = await q_all(env, "SELECT id,name title,location detail FROM arctic_research_stations WHERE name LIKE ? OR location LIKE ? LIMIT 8", term, term)
-    items.extend({"kind": "arctic_station", **row} for row in arctic)
     return {"items": items[:50]}
