@@ -10,6 +10,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-  "workers-py>=1.72.0",
+  "workers-py",
   "workers-runtime-sdk"
 ]
