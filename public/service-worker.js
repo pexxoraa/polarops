@@ -1,5 +1,5 @@
-const CACHE='polarops-shell-v19-arctic-research';
-const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=10','/static/app.js?v=15','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
+const CACHE='polarops-shell-v20-realtime-race';
+const SHELL=['/','/vendor/leaflet/leaflet.css','/vendor/leaflet/leaflet.js','/static/app.css','/static/reference-ui.css?v=10','/static/app.js?v=16','/media/antarctica-nasa.jpg','/media/arctic-nasa.jpg','/manifest.webmanifest'];
 
 self.addEventListener('install',e=>e.waitUntil(
   caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting())

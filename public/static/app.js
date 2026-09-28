@@ -114,18 +114,19 @@
     if(!state.token||!state.expeditionId||!navigator.onLine)return;
     disconnectRealtime();
     const generation=++state.wsGeneration;
+    const expeditionId=Number(state.expeditionId);
     state.realtimeStatus='connecting';updateRealtimeIndicator();
     let ticket;
     try{
-      const issued=await api(`/api/realtime/ticket?expedition_id=${state.expeditionId}`);
+      const issued=await api(`/api/realtime/ticket?expedition_id=${expeditionId}`);
       ticket=issued.ticket;
     }catch(err){
-      if(generation===state.wsGeneration){state.realtimeStatus='disconnected';updateRealtimeIndicator();clearTimeout(state.wsReconnect);state.wsReconnect=setTimeout(connectRealtime,5000)}
+      if(generation===state.wsGeneration&&expeditionId===Number(state.expeditionId)){state.realtimeStatus='disconnected';updateRealtimeIndicator();clearTimeout(state.wsReconnect);state.wsReconnect=setTimeout(connectRealtime,5000)}
       return;
     }
-    if(generation!==state.wsGeneration||!ticket)return;
+    if(generation!==state.wsGeneration||expeditionId!==Number(state.expeditionId)||!ticket)return;
     const protocol=location.protocol==='https:'?'wss':'ws';
-    const socket=new WebSocket(`${protocol}://${location.host}/ws/expeditions/${state.expeditionId}?ticket=${encodeURIComponent(ticket)}`);
+    const socket=new WebSocket(`${protocol}://${location.host}/ws/expeditions/${expeditionId}?ticket=${encodeURIComponent(ticket)}`);
     state.ws=socket;
     socket.onopen=()=>{ if(generation!==state.wsGeneration)return; socket.send(JSON.stringify({type:'auth',token:state.token})); };
     socket.onmessage=e=>{ if(generation!==state.wsGeneration)return; let msg;try{msg=JSON.parse(e.data)}catch{return}
