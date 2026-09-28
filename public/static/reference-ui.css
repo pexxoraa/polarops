@@ -103,3 +103,42 @@ td small{color:#8093a3}.icon-btn{background:#eef6ff;color:#0870d0;border-color:#
   .stats{grid-template-columns:repeat(2,1fr)}.grid-equal,.dashboard-side{grid-template-columns:1fr}.map{height:330px}
   .login-visual{padding:24px}.login-brand.brand-lockup strong{font-size:22px}.login-panel{padding-top:100px}
 }
+
+
+/* Polar region separation + real imagery */
+.login-copy{display:block;position:absolute;left:52px;bottom:38px;z-index:2;max-width:700px;color:#fff;text-shadow:0 2px 14px rgba(0,24,44,.48)}
+.login-copy h1{font-size:34px;line-height:1.05;max-width:630px;margin:9px 0 8px;color:#fff}
+.login-copy p{font-size:12px;line-height:1.55;color:#e9f7ff;max-width:600px;margin:0 0 13px}
+.login-region-gallery{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:min(620px,55vw)}
+.login-region-photo{height:112px;position:relative;overflow:hidden;border:1px solid rgba(255,255,255,.48);border-radius:10px;background:#163d5a;box-shadow:0 10px 28px rgba(0,24,44,.22)}
+.login-region-photo img{width:100%;height:100%;object-fit:cover;display:block}
+.login-region-photo:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 25%,rgba(3,28,49,.80))}
+.login-region-photo span{position:absolute;z-index:2;left:12px;bottom:10px;color:#eaf8ff;font-size:9px;line-height:1.35}.login-region-photo span strong{display:block;color:white;font-size:12px;letter-spacing:.8px}
+.polar-credit{font-size:8px;color:#d8effc;margin-top:7px;text-shadow:0 1px 7px #06243d}
+.polar-switch{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin:0 4px 10px}
+.polar-switch button{border:1px solid #1b537a;background:#0b3659;color:#9ebfd5;border-radius:7px;padding:7px 4px 6px;display:grid;grid-template-columns:18px 1fr;grid-template-rows:auto auto;align-items:center;text-align:left}
+.polar-switch button span{grid-row:1/3;font-size:13px;text-align:center}.polar-switch button b{font-size:8px;letter-spacing:.5px;color:#dcecf7}.polar-switch button small{font-size:7px;color:#7fa8c2}
+.polar-switch button.active{background:linear-gradient(180deg,#1686ee,#0a71d5);border-color:#2996f3;color:white;box-shadow:0 5px 14px rgba(0,34,66,.22)}
+.polar-switch button.active b,.polar-switch button.active small{color:white}
+body[data-pole="north"] .polar-switch button[data-pole="north"].active{background:linear-gradient(180deg,#05a7bf,#087b9b);border-color:#32c3d8}
+.region-banner{height:106px;border-radius:9px;background-size:cover;background-position:center 48%;display:flex;align-items:flex-end;justify-content:space-between;color:#fff;padding:15px 17px;margin-bottom:10px;box-shadow:var(--ref-shadow);overflow:hidden}
+.region-banner.north{background-position:center 44%}.region-banner>div:first-child{display:flex;flex-direction:column}.region-kicker{font-size:8px;letter-spacing:1.2px;font-weight:800;color:#aee7ff}.region-banner strong{font-size:19px;line-height:1.2;margin-top:3px}.region-banner small{font-size:9px;color:#dbeef8;margin-top:3px}
+.region-source{font-size:7px;background:rgba(4,37,63,.64);border:1px solid rgba(255,255,255,.23);border-radius:999px;padding:5px 8px;color:#e8f7ff;backdrop-filter:blur(4px)}
+.live-mission-map{height:428px;border:1px solid #c7d8e5;border-radius:6px;overflow:hidden;background:#d9e7ef;z-index:1}
+.live-map-note{display:flex;justify-content:space-between;gap:10px;padding:7px 2px 0;font-size:7px;color:#70879a}
+.live-map-note span:first-child{color:#13885c}
+.leaflet-container{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.leaflet-control-layers{border:1px solid #cbdbe6!important;border-radius:6px!important;box-shadow:0 5px 18px rgba(28,63,89,.15)!important;font-size:9px;color:#29465d}
+.leaflet-control-layers-expanded{padding:6px 9px!important}.leaflet-control-zoom a{color:#174a70!important}
+.polar-leaflet-icon{background:transparent!important;border:0!important}
+.polar-leaflet-icon .pm{position:absolute;left:0;top:0;width:31px;height:31px;border:2px solid white;border-radius:50%;display:grid;place-items:center;color:white;font-style:normal;font-size:11px;box-shadow:0 4px 12px rgba(13,49,75,.32);background:#1479da}
+.polar-leaflet-icon .pm.camp{background:#dc3b36}.polar-leaflet-icon .pm.vehicle{background:#12a366}.polar-leaflet-icon .pm.person{background:#7b4de0}.polar-leaflet-icon .pm.location{background:#1479da}
+.polar-leaflet-icon em{position:absolute;left:24px;top:2px;white-space:nowrap;background:rgba(255,255,255,.96);border:1px solid #c6d7e3;border-radius:6px;padding:5px 8px 5px 10px;color:#17364e;font-size:8px;font-weight:750;font-style:normal;box-shadow:0 4px 11px rgba(23,65,94,.14)}
+.leaflet-popup-content-wrapper{border-radius:7px;color:#234158}.leaflet-popup-content{font-size:10px;line-height:1.45;margin:10px 12px}
+
+@media(max-width:980px){
+  .login-copy{left:28px;bottom:28px;max-width:52vw}.login-copy h1{font-size:26px}.login-region-gallery{width:48vw}.login-region-photo{height:90px}
+}
+@media(max-width:760px){
+  .login-copy{display:none}.polar-switch{grid-template-columns:1fr 1fr;margin-bottom:8px}.region-banner{height:92px}.region-source{display:none}.live-mission-map{height:360px}.live-map-note{display:block}.live-map-note span{display:block;margin-top:3px}
+}
