@@ -106,7 +106,7 @@ async def _pbkdf2_bytes(password: str, salt: bytes, rounds: int) -> bytes:
         encoder.encode(password),
         "PBKDF2",
         False,
-        ["deriveBits"],
+        _to_js(["deriveBits"]),
     )
     salt_js = _to_js(salt)
     bits = await crypto.subtle.deriveBits(
