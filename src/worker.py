@@ -140,10 +140,19 @@ async def verify_password(password: str, encoded: str) -> bool:
         if algo != "pbkdf2_sha256":
             return False
         buffer_from = getattr(Buffer, "from")
-        salt = buffer_from(salt_b64, "base64")
-        expected = buffer_from(digest_b64, "base64")
+        # Seed hashes use URL-safe base64. Node/Workers Buffer accepts normal
+        # base64 most reliably, so normalize the alphabet before decoding.
+        normalized_salt = salt_b64.replace("-", "+").replace("_", "/")
+        salt = buffer_from(normalized_salt, "base64")
         actual = await _pbkdf2_bits(password, salt, int(rounds))
-        return bool(crypto.subtle.timingSafeEqual(actual, expected))
+
+        # SubtleCrypto does not provide timingSafeEqual. Convert the derived
+        # ArrayBuffer to base64url text and compare with Python's constant-time
+        # hmac.compare_digest instead.
+        actual_b64 = str(buffer_from(actual).toString("base64"))
+        actual_b64url = actual_b64.replace("+", "-").replace("/", "_").rstrip("=")
+        expected_b64url = digest_b64.rstrip("=")
+        return hmac.compare_digest(actual_b64url, expected_b64url)
     except Exception:
         return False
 
