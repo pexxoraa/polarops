@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import csv
 import hashlib
@@ -24,6 +25,10 @@ from pyodide.ffi import to_js as _to_js
 APP_VERSION = "2.0.0-cloudflare"
 DEFAULT_COMNAP_URL = "https://www.comnap.aq/s/Facilities_Nov2024.csv"
 DEFAULT_OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+DEFAULT_NSIDC_BASE = "https://noaadata.apps.nsidc.org/NOAA/G02135"
+DEFAULT_SWPC_KP_URL = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
+DEFAULT_SWPC_OVATION_BASE = "https://services.swpc.noaa.gov/products/animations"
+DEFAULT_USGS_EVENT_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 TOKEN_HOURS = 12
 
 app = FastAPI(title="PolarOps Cloudflare", version=APP_VERSION)
@@ -103,6 +108,228 @@ async def q_batch(env, queries: list[tuple[str, tuple]]) -> list[list[dict]]:
         rows = to_py(result.results)
         output.append(list(rows or []))
     return output
+
+
+async def cache_get_json(env, cache_key: str, max_age_seconds: int):
+    row = await q_first(env, "SELECT payload_json,fetched_at FROM external_cache WHERE cache_key=?", cache_key)
+    if not row:
+        return None
+    try:
+        fetched = datetime.fromisoformat(row["fetched_at"])
+        age = (datetime.now(timezone.utc) - fetched).total_seconds()
+        if age > max_age_seconds:
+            return None
+        payload = json.loads(row["payload_json"])
+        if isinstance(payload, dict):
+            payload["_cache_age_seconds"] = max(0, round(age))
+        return payload
+    except Exception:
+        return None
+
+
+async def cache_put_json(env, cache_key: str, payload: dict):
+    await q_write(
+        env,
+        """INSERT INTO external_cache(cache_key,payload_json,fetched_at) VALUES(?,?,?)
+        ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",
+        cache_key, json.dumps(payload, separators=(",", ":")), utcnow(),
+    )
+
+
+def polar_region(expedition: dict, locations: list[dict]) -> str:
+    region = str(expedition.get("region") or "").lower()
+    if "arctic" in region or "north" in region:
+        return "north"
+    if "antarctic" in region or "south" in region:
+        return "south"
+    for loc in locations:
+        try:
+            lat = float(loc.get("latitude"))
+            if abs(lat) >= 60:
+                return "north" if lat > 0 else "south"
+        except Exception:
+            pass
+    return "south"
+
+
+def primary_location(locations: list[dict]) -> dict | None:
+    mapped = [x for x in locations if x.get("latitude") is not None and x.get("longitude") is not None]
+    if not mapped:
+        return None
+    for pattern in ("base", "station", "hub", "camp"):
+        hit = next((x for x in mapped if pattern in f"{x.get('name','')} {x.get('type','')}".lower()), None)
+        if hit:
+            return hit
+    return mapped[0]
+
+
+async def environment_weather(env, location: dict, force: bool = False) -> dict:
+    lat = round(float(location["latitude"]), 4)
+    lon = round(float(location["longitude"]), 4)
+    key = f"env:weather:{lat}:{lon}"
+    if not force:
+        cached = await cache_get_json(env, key, 600)
+        if cached:
+            return cached
+    params = urllib.parse.urlencode({
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,snowfall,weather_code,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m",
+        "timezone": "UTC", "wind_speed_unit": "kmh", "temperature_unit": "celsius",
+    })
+    url = env_value(env, "OPEN_METEO_URL", DEFAULT_OPEN_METEO_URL) + "?" + params
+    resp = await cf_fetch(url)
+    if int(resp.status) >= 400:
+        raise RuntimeError(f"Open-Meteo HTTP {resp.status}")
+    raw = to_py(await resp.json()) or {}
+    cur = raw.get("current") or {}
+    payload = {
+        "location": location.get("name"), "latitude": lat, "longitude": lon,
+        "temperature_c": cur.get("temperature_2m"),
+        "apparent_temperature_c": cur.get("apparent_temperature"),
+        "relative_humidity": cur.get("relative_humidity_2m"),
+        "wind_speed_kph": cur.get("wind_speed_10m"),
+        "wind_gusts_kph": cur.get("wind_gusts_10m"),
+        "wind_direction_deg": cur.get("wind_direction_10m"),
+        "surface_pressure_hpa": cur.get("surface_pressure"),
+        "snowfall_mm": cur.get("snowfall"),
+        "weather_code": cur.get("weather_code"),
+        "observed_at": cur.get("time"),
+        "source": "Open-Meteo model current conditions",
+        "source_url": "https://open-meteo.com/",
+        "fetched_at": utcnow(),
+    }
+    await cache_put_json(env, key, payload)
+    return payload
+
+
+async def environment_sea_ice(env, pole: str, force: bool = False) -> dict:
+    key = f"env:seaice:{pole}"
+    if not force:
+        cached = await cache_get_json(env, key, 21600)
+        if cached:
+            return cached
+    now = datetime.now(timezone.utc)
+    months = [(now.year, now.month)]
+    if now.month == 1:
+        months.append((now.year - 1, 12))
+    else:
+        months.append((now.year, now.month - 1))
+    hemi = "north" if pole == "north" else "south"
+    prefix = "N" if pole == "north" else "S"
+    month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    found = None
+    for year, month in months:
+        folder = f"{month:02d}_{month_names[month-1]}"
+        base = f"{DEFAULT_NSIDC_BASE}/{hemi}/daily/images/{year}/{folder}/"
+        resp = await cf_fetch(base)
+        if int(resp.status) >= 400:
+            continue
+        html = await resp.text()
+        matches = re.findall(rf'href="({prefix}_(\d{{8}})_conc_blmrbl_v4\.0\.png)"', html)
+        if not matches:
+            continue
+        filename, datestr = sorted(matches, key=lambda x: x[1])[-1]
+        found = (base, filename, datestr)
+        break
+    if not found:
+        raise RuntimeError("NSIDC latest daily sea-ice image not found")
+    base, conc_name, datestr = found
+    extn_name = conc_name.replace("_conc_", "_extn_")
+    payload = {
+        "hemisphere": pole,
+        "date": f"{datestr[:4]}-{datestr[4:6]}-{datestr[6:8]}",
+        "concentration_image": base + conc_name,
+        "extent_image": base + extn_name,
+        "source": "NOAA/NSIDC Sea Ice Index, Version 4",
+        "source_url": "https://nsidc.org/data/seaice_index",
+        "freshness": "Daily, normally about one day behind",
+        "fetched_at": utcnow(),
+    }
+    await cache_put_json(env, key, payload)
+    return payload
+
+
+async def environment_space_weather(env, pole: str, force: bool = False) -> dict:
+    key = f"env:space:{pole}"
+    if not force:
+        cached = await cache_get_json(env, key, 300)
+        if cached:
+            return cached
+
+    kp_resp, aurora_resp = await asyncio.gather(
+        cf_fetch(DEFAULT_SWPC_KP_URL),
+        cf_fetch(f"{DEFAULT_SWPC_OVATION_BASE}/ovation_{pole}_24h.json"),
+    )
+    if int(kp_resp.status) >= 400:
+        raise RuntimeError(f"SWPC Kp HTTP {kp_resp.status}")
+    kp_rows = to_py(await kp_resp.json()) or []
+    latest_kp = kp_rows[-1] if kp_rows else {}
+
+    aurora = {}
+    if int(aurora_resp.status) < 400:
+        frames = to_py(await aurora_resp.json()) or []
+        latest_frame = frames[-1] if frames else {}
+        if latest_frame:
+            aurora = {
+                "time_tag": latest_frame.get("time_tag"),
+                "image_url": "https://services.swpc.noaa.gov" + str(latest_frame.get("url") or ""),
+            }
+
+    est = float(latest_kp.get("estimated_kp") or latest_kp.get("kp_index") or 0)
+    level = "high" if est >= 7 else "elevated" if est >= 5 else "moderate" if est >= 4 else "low"
+    payload = {
+        "kp_index": latest_kp.get("kp_index"),
+        "estimated_kp": est,
+        "time_tag": latest_kp.get("time_tag"),
+        "communications_risk": level,
+        "aurora": aurora,
+        "source": "NOAA Space Weather Prediction Center",
+        "source_url": "https://www.swpc.noaa.gov/",
+        "fetched_at": utcnow(),
+    }
+    await cache_put_json(env, key, payload)
+    return payload
+
+
+async def environment_earthquakes(env, pole: str, force: bool = False) -> dict:
+    key = f"env:quakes:{pole}"
+    if not force:
+        cached = await cache_get_json(env, key, 600)
+        if cached:
+            return cached
+    start = datetime.fromtimestamp(time.time() - 30 * 86400, timezone.utc).strftime("%Y-%m-%d")
+    params = {
+        "format": "geojson", "starttime": start, "minmagnitude": 4.0,
+        "orderby": "time", "limit": 20,
+    }
+    if pole == "north":
+        params["minlatitude"] = 60
+    else:
+        params["maxlatitude"] = -60
+    url = DEFAULT_USGS_EVENT_URL + "?" + urllib.parse.urlencode(params)
+    resp = await cf_fetch(url)
+    if int(resp.status) >= 400:
+        raise RuntimeError(f"USGS HTTP {resp.status}")
+    raw = to_py(await resp.json()) or {}
+    events = []
+    for feature in (raw.get("features") or [])[:20]:
+        prop = feature.get("properties") or {}
+        coords = (feature.get("geometry") or {}).get("coordinates") or [None, None, None]
+        ms = prop.get("time")
+        when = datetime.fromtimestamp(float(ms) / 1000, timezone.utc).isoformat() if ms else None
+        events.append({
+            "id": feature.get("id"), "magnitude": prop.get("mag"), "place": prop.get("place"),
+            "time": when, "longitude": coords[0], "latitude": coords[1], "depth_km": coords[2],
+            "detail_url": prop.get("url"),
+        })
+    payload = {
+        "period_days": 30, "minimum_magnitude": 4.0, "count": len(events), "events": events,
+        "source": "USGS Earthquake Hazards Program",
+        "source_url": "https://earthquake.usgs.gov/",
+        "fetched_at": utcnow(),
+    }
+    await cache_put_json(env, key, payload)
+    return payload
 
 
 def last_row_id(result) -> int:
@@ -513,7 +740,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(self), camera=(self)"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com; media-src 'self' blob:; connect-src 'self' ws: wss:; "
+        "img-src 'self' data: blob: https://server.arcgisonline.com https://noaadata.apps.nsidc.org https://services.swpc.noaa.gov; media-src 'self' blob:; connect-src 'self' ws: wss:; "
         "object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
     if request.url.path.startswith("/api/"):
@@ -719,6 +946,99 @@ async def telemetry_history(expedition_id: int, entity_type: str, entity_id: int
     if entity_type not in ("personnel", "vehicle"):
         raise HTTPException(400, "entity_type must be personnel or vehicle")
     return await q_all(env, "SELECT * FROM telemetry_positions WHERE expedition_id=? AND entity_type=? AND entity_id=? ORDER BY id DESC LIMIT ?", expedition_id, entity_type, entity_id, min(max(limit, 1), 2000))
+
+
+@app.get("/api/environment/overview")
+async def environment_overview(expedition_id: int, request: Request, force: bool = False, user=Depends(current_user)):
+    env = request.scope["env"]
+    expedition = await ensure_expedition_access(env, user, expedition_id)
+    locations = await q_all(env, "SELECT * FROM locations WHERE expedition_id=? ORDER BY id", expedition_id)
+    base = primary_location(locations)
+    pole = polar_region(expedition, locations)
+
+    tasks = [
+        environment_sea_ice(env, pole, force),
+        environment_space_weather(env, pole, force),
+        environment_earthquakes(env, pole, force),
+    ]
+    labels = ["sea_ice", "space_weather", "earthquakes"]
+    if base:
+        tasks.insert(0, environment_weather(env, base, force))
+        labels.insert(0, "weather")
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    data = {}
+    errors = {}
+    for label, value in zip(labels, results):
+        if isinstance(value, Exception):
+            errors[label] = str(value)
+        else:
+            data[label] = value
+
+    if "weather" not in data:
+        data["weather"] = None
+
+    resources = [
+        {
+            "name": "SCAR Antarctic Digital Database",
+            "category": "topography",
+            "regions": ["south"],
+            "url": "https://add.scar.org/",
+            "detail": "BAS/SCAR coastline, ice-shelf fronts, contours, rock outcrop, lakes and related Antarctic mapping data.",
+            "update": "Version 7.12 released 12 May 2026; reviewed on a six-month cycle.",
+        },
+        {
+            "name": "BAS Ice Logistics Portal",
+            "category": "ice operations",
+            "regions": ["north", "south"],
+            "url": "https://www.icelogistics.info/",
+            "detail": "Current polar ice charts plus Sentinel-1/RADARSAT imagery catalogue for logistics and sea-ice awareness.",
+            "update": "Operational catalogue; product dates vary by provider.",
+        },
+        {
+            "name": "NASA Worldview",
+            "category": "satellite imagery",
+            "regions": ["north", "south"],
+            "url": "https://worldview.earthdata.nasa.gov/",
+            "detail": "Near-real-time satellite imagery and scientific layers for visual environmental assessment.",
+            "update": "Many LANCE near-real-time products target a latency of a few hours.",
+        },
+        {
+            "name": "NOAA/NSIDC Sea Ice Index",
+            "category": "sea ice",
+            "regions": ["north", "south"],
+            "url": "https://nsidc.org/data/seaice_index",
+            "detail": "Daily Arctic and Antarctic sea-ice extent and concentration products.",
+            "update": "Daily with an approximately one-day lag.",
+        },
+        {
+            "name": "Antarctic Treaty EIES",
+            "category": "operations",
+            "regions": ["south"],
+            "url": "https://www.ats.aq/s/information.html",
+            "detail": "Official information exchange for stations, camps, vessels, aircraft and other Antarctic operational information.",
+            "update": "Submitted by Antarctic Treaty Parties on the Treaty reporting cycle.",
+        },
+        {
+            "name": "AntarcticGlaciers.org datasets",
+            "category": "science reference",
+            "regions": ["south"],
+            "url": "https://www.antarcticglaciers.org/antarctica-2/antarctic-datasets/",
+            "detail": "Curated discovery page for Antarctic glaciology datasets such as ADD, BedMachine, ice velocity, GLIMS and IBCSO.",
+            "update": "Reference/discovery resource, not an operational live feed.",
+        },
+    ]
+    region_resources = [r for r in resources if pole in r["regions"]]
+
+    return {
+        "expedition": expedition,
+        "pole": pole,
+        "primary_location": base,
+        "generated_at": utcnow(),
+        "data": data,
+        "errors": errors,
+        "resources": region_resources,
+    }
 
 
 # ----------------------------- Dashboard/personnel ------------------------
