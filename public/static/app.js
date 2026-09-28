@@ -12,7 +12,8 @@
     realtimeStatus:'disconnected', ws:null, wsGeneration:0, wsReconnect:null, wsPing:null, realtimeRender:null,
     fallbackTimer:null, deferredRealtime:false,
     gpsWatchId:null, gpsPersonnelId:null, gpsLastSent:0,
-    vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null
+    vehicleSimTimer:null, vehicleSimId:null, vehicleSimStep:0, vehicleSimBase:null,
+    liveMap:null
   };
 
   const navItems=[
@@ -138,6 +139,33 @@
   function statusKind(s=''){ s=s.toLowerCase(); if(/safe|delivered|operational|available|cleared|resolved|ok/.test(s))return'good'; if(/critical|active|low|overdue|due|maintenance|high/.test(s))return'danger'; if(/transit|moving|response|deployed|medium/.test(s))return'info'; return'warn'; }
   function roleCan(...roles){ return !!state.user && roles.includes(state.user.role); }
 
+  function poleForRegion(region=''){
+    const r=String(region||'').toLowerCase();
+    if(r.includes('antarctic')||r.includes('south'))return 'south';
+    if(r.includes('arctic')||r.includes('north'))return 'north';
+    return 'south';
+  }
+  function currentPole(){
+    const exp=state.expeditions.find(e=>e.id===state.expeditionId);
+    return poleForRegion(exp?.region);
+  }
+  function applyPolarTheme(){ document.body.dataset.pole=currentPole(); }
+  function destroyLiveMap(){
+    if(state.liveMap){ try{state.liveMap.remove()}catch{} state.liveMap=null; }
+  }
+  async function switchExpedition(id){
+    const next=state.expeditions.find(e=>e.id===Number(id)); if(!next)return;
+    stopPersonnelGps(false); stopVehicleSimulation(false); destroyLiveMap();
+    state.expeditionId=Number(next.id);
+    localStorage.setItem('polarops_expedition',state.expeditionId);
+    applyPolarTheme(); renderShell(); await renderView(); connectRealtime();
+  }
+  async function switchPole(pole){
+    const next=state.expeditions.find(e=>poleForRegion(e.region)===pole);
+    if(!next){toast(pole==='north'?'No Arctic mission':'No Antarctic mission','Create or import an expedition for this polar region.','warn');return}
+    await switchExpedition(next.id);
+  }
+
   function renderLogin(){
     document.title='PolarOps — Sign in';
     $('#app').innerHTML=`
@@ -146,9 +174,13 @@
           <div class="login-brand brand-lockup"><div class="brand-mark">✦</div><div><strong>POLAROPS</strong><span>Expedition Operations Platform</span></div></div>
           <div class="login-copy">
             <span class="eyebrow">Integrated mission command</span>
-            <h1>One operational picture for extreme environments.</h1>
-            <p>Plan expeditions, account for personnel, track cargo and assets, manage safety stock, coordinate vehicles and run emergency response from one shared system.</p>
-            <div class="capability-strip"><span>Personnel accountability</span><span>Cargo chain of custody</span><span>Inventory thresholds</span><span>Asset control</span><span>Emergency command</span><span>Offline queue</span></div>
+            <h1>One operational picture for both polar regions.</h1>
+            <p>Separate Arctic and Antarctic operations while keeping personnel, cargo, assets, vehicles and emergency response in one platform.</p>
+            <div class="login-region-gallery">
+              <div class="login-region-photo south"><img src="/media/antarctica-nasa.jpg" alt="Antarctica, NASA/JPL imagery"><span><strong>ANTARCTIC</strong>South polar operations</span></div>
+              <div class="login-region-photo north"><img src="/media/arctic-nasa.jpg" alt="Arctic sea ice, NASA Scientific Visualization Studio"><span><strong>ARCTIC</strong>North polar operations</span></div>
+            </div>
+            <div class="polar-credit">Polar imagery: NASA/JPL · NASA Scientific Visualization Studio</div>
           </div>
         </section>
         <section class="login-panel">
@@ -186,6 +218,10 @@
     $('#app').innerHTML=`<div class="shell">
       <aside class="sidebar">
         <div class="brand-lockup"><div class="brand-mark">✦</div><div><strong>POLAROPS</strong><span>Operations platform</span></div></div>
+        <div class="polar-switch" aria-label="Polar region">
+          <button data-pole="south" class="${poleForRegion(exp.region)==='south'?'active':''}"><span>▼</span><b>ANTARCTIC</b><small>SOUTH</small></button>
+          <button data-pole="north" class="${poleForRegion(exp.region)==='north'?'active':''}"><span>▲</span><b>ARCTIC</b><small>NORTH</small></button>
+        </div>
         <div class="mission-card"><small>ACTIVE MISSION</small><strong id="missionName">${esc(exp.name)}</strong><span id="missionRegion">${esc(exp.region)}</span></div>
         <nav class="nav">${navItems.map(([id,ico,label])=>`<button data-view="${id}" class="${id===state.view?'active':''}"><span class="ico">${ico}</span><span>${label}</span></button>`).join('')}</nav>
         <div class="sidebar-bottom"><div class="sync-box"><i class="sync-dot"></i><div><strong id="syncLabel">SYNC ONLINE</strong><span id="syncDetail">Central database connected</span></div></div>
@@ -195,15 +231,18 @@
       <main class="main"><header class="topbar"><div><span class="eyebrow" id="crumb">POLAR OPERATIONS / ${esc(exp.name)}</span><h1 id="pageTitle">Overview</h1><div id="pageSubtitle" class="page-subtitle">Live expedition status and exceptions.</div></div>
         <div class="topbar-actions"><span class="realtime-pill connecting" id="realtimePill"><i></i><span id="realtimeLabel">CONNECTING</span></span><select class="expedition-select" id="expeditionSelect">${state.expeditions.map(e=>`<option value="${e.id}" ${e.id===state.expeditionId?'selected':''}>${esc(e.name)}</option>`).join('')}</select><button class="sos-btn" id="globalSOS">⚠ TRIGGER SOS</button></div>
       </header><section id="view"></section></main></div>`;
-    $$('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
+    applyPolarTheme();
+    $('.nav button').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
+    $('[data-pole]').forEach(b=>b.addEventListener('click',()=>switchPole(b.dataset.pole)));
     $('.logout-btn').addEventListener('click',()=>logout());
-    $('#expeditionSelect').addEventListener('change',async e=>{stopPersonnelGps(false);stopVehicleSimulation(false);state.expeditionId=Number(e.target.value);localStorage.setItem('polarops_expedition',state.expeditionId);const ex=state.expeditions.find(x=>x.id===state.expeditionId);$('#missionName').textContent=ex.name;$('#missionRegion').textContent=ex.region;await renderView();connectRealtime()});
+    $('#expeditionSelect').addEventListener('change',e=>switchExpedition(Number(e.target.value)));
     $('#globalSOS').addEventListener('click',()=>openIncidentCreate()); updateSync();updateRealtimeIndicator();
   }
 
   async function navigate(view){ state.view=view; $$('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); await renderView(); }
   function setHeader(title,subtitle){ const exp=state.expeditions.find(e=>e.id===state.expeditionId); $('#pageTitle').textContent=title;$('#pageSubtitle').textContent=subtitle||'';$('#crumb').textContent=`POLAR OPERATIONS / ${exp?.name||''}`; document.title=`${title} — PolarOps`; }
   async function renderView(){
+    destroyLiveMap();
     const v=$('#view'); if(!v)return; v.innerHTML='<div class="panel"><div class="empty"><div><strong>Loading mission data…</strong>Connecting to central operations database.</div></div></div>';
     try{
       if(state.view==='overview')await renderOverview(); else if(state.view==='personnel')await renderPersonnel(); else if(state.view==='cargo')await renderCargo(); else if(state.view==='inventory')await renderInventory(); else if(state.view==='assets')await renderAssets(); else if(state.view==='vehicles')await renderVehicles(); else if(state.view==='emergency')await renderEmergency(); else if(state.view==='network')await renderNetwork(); else if(state.view==='activity')await renderActivity(); else if(state.view==='settings')await renderSettings();
@@ -214,7 +253,13 @@
     const d=await api(`/api/dashboard?expedition_id=${state.expeditionId}`), s=d.stats;
     setHeader(`${d.expedition.name} — Command Dashboard`, `${d.expedition.start_date||'—'} – ${d.expedition.end_date||'—'}  |  ${d.expedition.region}`);
     const riskScore=Math.min(100,d.risks.reduce((a,r)=>a+(r.severity==='high'?28:14),0));
+    const pole=poleForRegion(d.expedition.region), regionName=pole==='north'?'ARCTIC / NORTH POLAR OPERATIONS':'ANTARCTIC / SOUTH POLAR OPERATIONS';
+    const regionImage=pole==='north'?'/media/arctic-nasa.jpg':'/media/antarctica-nasa.jpg';
     $('#view').innerHTML=`
+      <div class="region-banner ${pole}" style="background-image:linear-gradient(90deg,rgba(5,39,66,.88),rgba(5,39,66,.30)),url('${regionImage}')">
+        <div><span class="region-kicker">${regionName}</span><strong>${esc(d.expedition.name)}</strong><small>${esc(d.expedition.region)} · Real map + live operational overlays</small></div>
+        <div class="region-source">${pole==='north'?'NASA SVS Arctic sea-ice imagery':'NASA/JPL Antarctic imagery'}</div>
+      </div>
       <div class="stats">
         ${stat('Personnel',`${s.personnel_total-s.personnel_overdue} / ${s.personnel_total}`,s.personnel_overdue?`${s.personnel_overdue} check-in overdue`:'Safe / accounted for','◎',s.personnel_overdue?'danger':'good')}
         ${stat('Cargo',`${s.cargo_delivered} / ${s.cargo_total}`,'Delivered','▣','info')}
@@ -226,7 +271,8 @@
       <div class="grid-2">
         <div class="panel">
           <div class="panel-head"><div><h2>Expedition Map</h2><p>Live mission locations, personnel and response vehicles.</p></div><span class="badge info"><i class="dot"></i>LIVE</span></div>
-          ${renderMap(d.locations,d.vehicles,d.personnel)}
+          <div id="liveMissionMap" class="live-mission-map" role="application" aria-label="Live expedition map"></div>
+          <div class="live-map-note"><span>● Live GPS updates through PolarOps WebSockets</span><span>Basemap: OpenStreetMap · Satellite: Esri</span></div>
         </div>
         <div class="dashboard-side">
           <div class="panel">
@@ -239,8 +285,47 @@
           </div>
         </div>
       </div>`;
-    $$('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
+    $('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go));
+    initLiveMissionMap(d.locations,d.vehicles,d.personnel,d.expedition);
   }
+
+  function polarMarker(kind,label){
+    const glyph=kind==='vehicle'?'▣':kind==='person'?'●':kind==='camp'?'▲':'⌂';
+    return L.divIcon({className:'polar-leaflet-icon',html:`<span class="pm ${kind}">${glyph}</span><em>${esc(label)}</em>`,iconSize:[120,34],iconAnchor:[17,17]});
+  }
+  function initLiveMissionMap(locations,vehicles,personnel,expedition){
+    const el=$('#liveMissionMap');
+    if(!el||!window.L)return;
+    destroyLiveMap();
+    const fixed=locations.filter(x=>Number.isFinite(Number(x.latitude))&&Number.isFinite(Number(x.longitude)));
+    const vehiclePoints=vehicles.filter(v=>Number.isFinite(Number(v.latitude))&&Number.isFinite(Number(v.longitude)));
+    const peoplePoints=personnel.filter(p=>Number.isFinite(Number(p.live_latitude))&&Number.isFinite(Number(p.live_longitude)));
+    const all=[...fixed.map(x=>[+x.latitude,+x.longitude]),...vehiclePoints.map(x=>[+x.latitude,+x.longitude]),...peoplePoints.map(x=>[+x.live_latitude,+x.live_longitude])];
+    const pole=poleForRegion(expedition?.region);
+    const fallback=pole==='north'?[78.7,15]:[-75,40];
+    state.liveMap=L.map(el,{zoomControl:true,attributionControl:true,worldCopyJump:false,minZoom:2,maxZoom:18}).setView(fallback,pole==='north'?4:3);
+    const street=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap contributors'});
+    const satellite=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:18,attribution:'Tiles © Esri'});
+    street.addTo(state.liveMap);
+    L.control.layers({'Map':street,'Satellite':satellite},null,{position:'topright',collapsed:false}).addTo(state.liveMap);
+    const base=fixed.find(x=>/base|station|hub/i.test(`${x.name} ${x.type}`))||fixed[0];
+    if(base){
+      fixed.filter(x=>x.id!==base.id).forEach(x=>L.polyline([[+base.latitude,+base.longitude],[+x.latitude,+x.longitude]],{color:'#0b78e3',weight:2,dashArray:'7 7',opacity:.65}).addTo(state.liveMap));
+    }
+    fixed.forEach(x=>{
+      const kind=/camp/i.test(x.type)?'camp':'location';
+      L.marker([+x.latitude,+x.longitude],{icon:polarMarker(kind,x.name)}).addTo(state.liveMap)
+        .bindPopup(`<strong>${esc(x.name)}</strong><br>${esc(x.type)}<br><small>${n(x.latitude,5)}, ${n(x.longitude,5)}</small>`);
+    });
+    vehiclePoints.forEach(v=>L.marker([+v.latitude,+v.longitude],{icon:polarMarker('vehicle',`${v.code} ${v.telemetry_recorded_at?'LIVE':''}`)}).addTo(state.liveMap)
+      .bindPopup(`<strong>${esc(v.code)} · ${esc(v.name)}</strong><br>${esc(v.status)} · ${n(v.fuel_percent)}% fuel${v.telemetry_recorded_at?`<br><b>LIVE GPS</b> · ${ago(v.telemetry_recorded_at)}`:''}`));
+    peoplePoints.forEach(p=>L.marker([+p.live_latitude,+p.live_longitude],{icon:polarMarker('person',`${p.name} LIVE`)}).addTo(state.liveMap)
+      .bindPopup(`<strong>${esc(p.name)}</strong><br>${esc(p.role)}<br><b>LIVE GPS</b> · ${ago(p.telemetry_recorded_at)}`));
+    if(all.length===1)state.liveMap.setView(all[0],7);
+    else if(all.length>1)state.liveMap.fitBounds(L.latLngBounds(all).pad(.18),{maxZoom:7});
+    setTimeout(()=>state.liveMap?.invalidateSize(),50);
+  }
+
   function stat(label,value,detail,ico,kind=''){return `<div class="stat ${kind}"><div class="stat-head"><span class="stat-label">${label}</span><span class="stat-icon">${ico}</span></div><div class="stat-value">${value}</div><div class="stat-detail">${esc(detail)}</div></div>`}
   function activityRow(a){return `<div class="activity-item"><div class="activity-icon">${({personnel:'◎',cargo:'▣',inventory:'▤',vehicle:'▱',incident:'△',asset:'◇',location:'⌖'})[a.category]||'•'}</div><div><strong>${esc(a.message)}</strong><span>${a.user_name?`By ${esc(a.user_name)}`:'System event'}</span></div><time>${fmtTime(a.created_at)}</time></div>`}
 
